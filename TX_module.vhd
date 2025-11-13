@@ -28,7 +28,7 @@ architecture rtl of TX is
 	
 	-- Klok signaler
 	constant clock_p_bit : integer := 1250; --12000000/9600 = 12MHz/9600 baud rate = 1250
-	signal baud_count : integer range 0 to clock_p_bit-1: -- Baud counter, som bruges til at tælle op til 1249
+	signal baud_count : integer range 0 to clock_p_bit-1; -- Baud counter, som bruges til at tælle op til 1249
 	signal baud_tick : std_logic; -- Når baud counter kommer op til 1250, bliver baud_tick slået til logisk 1.
 	
 begin
@@ -51,7 +51,7 @@ begin
 			end if;
 		end if;
 	
-	end baudgen;
+	end process baudgen;
 
 	logic_reg: process(clk, reset) -- Sekventiel logik og data path
 	begin
@@ -91,7 +91,7 @@ begin
 					
 			end CASE;
 		end if;
-	end logic_reg;
+	end process logic_reg;
 	
 	next_state_proc : process (state, data_available, bit_count, baud_tick) -- Logik til state transition
 	begin
