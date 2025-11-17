@@ -30,8 +30,7 @@ architecture rtl of TX is
 	constant clock_p_bit : integer := 1250; --12000000/9600 = 12MHz/9600 baud rate = 1250
 	signal baud_count : integer range 0 to clock_p_bit-1; -- Baud counter, som bruges til at tælle op til 1249
 	signal baud_tick : std_logic; -- Når baud counter kommer op til 1250, bliver baud_tick slået til logisk 1.
-	signal baud_reset: std_logic;
-
+	
 begin
 
 	baudgen: process(clk,reset) -- logik til baud rate generator.
@@ -44,7 +43,7 @@ begin
 		elsif rising_edge(clk) then -- hvert rising edge
 			baud_tick <= '0';
 			
-			if baud_reset = '1' or baud_count = clock_p_bit-1 then
+			if baud_count = clock_p_bit-1 then
 				baud_count <= 0;
 				baud_tick <= '1';
 			else
@@ -61,40 +60,34 @@ begin
 			state <= IDLE;
 			shift_reg <= (others => '0');
 			bit_count <= 0;
+
 			
 		ELSIF rising_edge(clk) then
+
 			state <= next_state;
 			CASE state IS
 
-				WHEN IDLE =>
-					if data_available = '1' then
-						shift_reg <= unsigned(tx_data);
-						bit_count <= 0;
-						baud_reset <= '1';
-					end if;
-
-				WHEN START =>
-					if baud_tick = '1' then
-						baud_reset <= '1';
-					end if;
-
-				WHEN DATA =>
-					if baud_tick = '1' then
-						shift_reg <= '0' & shift_reg(7 downto 1); -- Right Bit shifter. Sammenkæder et 0 på data bits.
-						bit_count <= bit_count+1;
-						baud_reset <= '1';
-					end if;
-
-				when STOP =>
-					if baud_tick = '1' THEN
-						baud_reset <= '1';
-					end if;
+                
+            WHEN DATA =>
+                if baud_tick = '1' then
+                    shift_reg <= '0' & shift_reg(7 downto 1);
+                    bit_count <= bit_count + 1;
+                end if;
+                
+            WHEN IDLE =>
+                if data_available = '1' then
+                    shift_reg <= unsigned(tx_data);
+                    bit_count <= 0;
+                end if;
+            
+            WHEN others =>
+                NULL;
 					
 			end CASE;
 		end if;
 	end process logic_reg;
 	
-	next_state_proc : process (state, data_available, bit_count, baud_tick) -- Logik til state transition
+	next_state_proc : process (state, data_available, bit_count, baud_tick) -- kombinatorisk Logik til state transition
 	begin
 	
 		case state IS
@@ -131,7 +124,7 @@ begin
 		
 	end process next_state_proc;
 	
-	state_output: process (state, shift_reg) -- Logik til state output
+	state_output: process (state, shift_reg) -- kombinatorisk Logik til state output
 	begin
 		case state IS
 			WHEN IDLE =>
@@ -151,6 +144,3 @@ begin
 	end process state_output;
 
 end rtl;
-
--- Husk Alex! Problemer med Start state ved første omgang. Start state forbliver i 2 baud periods 204.3334 us, i stedet for 1 baud period. Det gælder kun for første omgang
--- Desuden bør det også være at IDLE skal 
