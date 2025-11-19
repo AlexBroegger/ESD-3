@@ -30,12 +30,12 @@ architecture rtl of TX is
 	constant clock_p_bit : integer := 1250; --12000000/9600 = 12MHz/9600 baud rate = 1250
 	signal baud_count : integer range 0 to clock_p_bit-1; -- Baud counter, som bruges til at tælle op til 1249
 	signal baud_tick : std_logic; -- Når baud counter kommer op til 1250, bliver baud_tick slået til logisk 1.
+	signal baud_reset: std_logic; -- Reset signal
 	
 begin
 
 	baudgen: process(clk,reset) -- logik til baud rate generator.
-	begin
-	
+	begin 
 		if reset = '1' then
 			baud_count <= 0;
 			baud_tick <= '0';
@@ -43,16 +43,21 @@ begin
 		elsif rising_edge(clk) then -- hvert rising edge
 			baud_tick <= '0';
 			
-			if baud_count = clock_p_bit-1 then
+			if baud_reset = '1' then 
+			    baud_count <= 1;  -- Start paa 1 saa timing faktisk passer (Som det gør nu)
+			    baud_tick <= '0';
+			elsif baud_count = clock_p_bit-1 then
 				baud_count <= 0;
 				baud_tick <= '1';
-			else
+			else 
 				baud_count <= baud_count +1;
 			end if;
 		end if;
 	
 	end process baudgen;
 
+	baud_reset <= '1' when (next_state = START and state = IDLE and data_available = '1') else '0'; -- Lidt klamt, men det fungere
+	
 	logic_reg: process(clk, reset) -- Sekventiel logik og data path
 	begin
 	
@@ -60,10 +65,9 @@ begin
 			state <= IDLE;
 			shift_reg <= (others => '0');
 			bit_count <= 0;
-
+            
 			
 		ELSIF rising_edge(clk) then
-
 			state <= next_state;
 			CASE state IS
 
@@ -76,10 +80,11 @@ begin
                 
             WHEN IDLE =>
                 if data_available = '1' then
-                    shift_reg <= unsigned(tx_data);
+                    shift_reg <= tx_data;
                     bit_count <= 0;
                 end if;
-            
+                
+          
             WHEN others =>
                 NULL;
 					
@@ -87,19 +92,22 @@ begin
 		end if;
 	end process logic_reg;
 	
-	next_state_proc : process (state, data_available, bit_count, baud_tick) -- kombinatorisk Logik til state transition
+	next_state_proc : process (state, data_available, bit_count, baud_tick) -- Logik til state transition
 	begin
-	
+        
 		case state IS
 		
 			WHEN IDLE => -- IDLE state transition
 				if data_available = '1' then
+				    
 					next_state <= START;
+					
 				else
 					next_state <= IDLE;
 				end if;
 				
 			WHEN START => -- START state transition
+			    
 				if baud_tick = '1' then
 					next_state <= DATA;
                 else
@@ -107,6 +115,7 @@ begin
 				end if;
 				
 			WHEN DATA => -- DATA state transition
+			
 				if bit_count = 7 and baud_tick='1' then
 					next_state <= STOP;
 				else
@@ -114,6 +123,7 @@ begin
 				end if;
 				
 			WHEN STOP => -- STOP state transition
+			
 				if baud_tick = '1' THEN
 					next_state <= IDLE;
                 else
