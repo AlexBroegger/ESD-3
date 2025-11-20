@@ -8,7 +8,7 @@ entity RX is
     clk: in std_logic;
     reset: in std_logic;
     rx_line: in std_logic;
-
+    
     );
 
 end RX;
@@ -32,5 +32,18 @@ architecture rtl of RX is
     signal os_reset : std_logic; 
 
 begin
-
+    baudgen: process(clk,reset)
+    begin
+        if reset = '1' then
+            os_count <= 0;
+            os_tick <= '0';
+        elsif rising_edge(clk) then
+            if os_count = oversampling-1 then
+                os_count <= 0;
+                os_tick <= '1';
+            else
+                os_count <= os_count+1;
+            end if;
+        end if;
+    end process baudgen;
 end rtl;
