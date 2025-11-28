@@ -34,6 +34,26 @@ architecture rtl of RX is
     signal shift_en     : std_logic; -- Tillader shift
     signal done_sample  : std_logic; -- Færdig med at sample
 
+    signal paritys := 
+    -- Parity Funktion (bare så det ikke bliver så skide grimt....)
+    function parity (data: std_logic_vector) return std_logic is variable p : std_logic := 0;
+    begin
+        for i in data'range loop
+            p := p xor data(i)
+        end loop;
+        return p;
+    end function
+
+    function parity_mode (parity_p: std_logic; parity_mode: std_logic) return std_logic is variable parity_eoo : std_logic :=0;
+    begin
+        if parity_mode = 0 then
+            parity_eoo := parity_p
+        elsif parity_mode = 1 then
+            parity_eoo := not parity_p 
+        end if;
+        return parity_eoo
+    end function;
+
 begin
 
     --2ff, bruges til metastability problemer
