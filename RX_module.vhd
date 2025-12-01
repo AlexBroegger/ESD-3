@@ -22,36 +22,41 @@ architecture rtl of RX is
     signal shift_reg : unsigned(7 downto 0);
     signal bit_count : integer range 0 to 7;
 
-
+-- 
     constant oversample       : integer := 16; -- Vores valgte oversampling rate. Vi har 16 gange oversampling
     constant clock_p_16x      : integer := 78 ; -- Dette er 12MHz/(9600*16)=78.125, og vi runder ned. Dette betyder der kommer lidt tidsdrift
-    signal os_count           : integer range 0 to clock_p_16x-1; -- Tæller op til
+    signal os_count           : integer range 0 to 77; -- Tæller op til
     signal os_tick            : std_logic; -- Bliver en når vi når til 78
 
     signal sample_count : integer range 0 to 15;
 
-
+-- flag signaler
     signal shift_en     : std_logic; -- Tillader shift
     signal done_sample  : std_logic; -- Færdig med at sample
+    signal parity_valid : std_logic; -- Parity_valid = 0 
 
-    signal paritys := 
+-- Parity signaler
+    signal paritys : std_logic; -- beregnet parity værdi
+    signal parity_m : std_logic; -- parity_m = 0 er even parity, parity_m = 1 er odd parity
+    signal paritys_sampled : std_logic; -- Samplet parity værdi
+    
     -- Parity Funktion (bare så det ikke bliver så skide grimt....)
-    function parity (data: std_logic_vector) return std_logic is variable p : std_logic := 0;
+    function parity (data: std_logic_vector) return std_logic is variable p : std_logic := '0';
     begin
         for i in data'range loop
-            p := p xor data(i)
+            p := p xor data(i);
         end loop;
         return p;
-    end function
+    end function;
 
-    function parity_mode (parity_p: std_logic; parity_mode: std_logic) return std_logic is variable parity_eoo : std_logic :=0;
+    function parity_mode (parity_p: std_logic; parity_mode: std_logic) return std_logic is variable parity_eoo : std_logic := '0';
     begin
-        if parity_mode = 0 then
-            parity_eoo := parity_p
-        elsif parity_mode = 1 then
-            parity_eoo := not parity_p 
+        if parity_mode = '0' then
+            parity_eoo := parity_p;
+        elsif parity_mode = '1' then
+            parity_eoo := not parity_p;
         end if;
-        return parity_eoo
+        return parity_eoo;
     end function;
 
 begin
@@ -139,7 +144,7 @@ begin
 
             when START =>
                 -- Vi tjekker midten af bit.
-                if os_tick='1' and sample_count = oversample/2 then
+                if os_tick='1' and sample_count = 8 then
                     if rx_sync_2='0' then
                         next_state <= DATA;
                     else
@@ -148,14 +153,14 @@ begin
                 end if;
 
             when DATA =>
-                if os_tick='1' and sample_count = oversample/2 then
+                if os_tick='1' and sample_count = 8 then
                     if bit_count = 7 then
                         next_state <= STOP;
                     end if;
                 end if;
 
             when STOP =>
-                if os_tick='1' and sample_count = oversample/2 then
+                if os_tick='1' and sample_count = 8 then
                     next_state <= IDLE;
                 end if;
         end case;
@@ -174,11 +179,11 @@ begin
             when START =>
             -- Intet
             when DATA =>
-                if os_tick='1' and sample_count = oversample/2 then
+                if os_tick='1' and sample_count = 8 then
                     shift_en <= '1';
                 end if;
             when STOP =>
-                if os_tick='1' and sample_count = oversample/2 then
+                if os_tick='1' and sample_count = 8 then
                     rx_ready    <= '1';
                     done_sample <= '1';
                 end if;
