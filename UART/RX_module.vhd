@@ -7,19 +7,21 @@ entity RX is
         clk        : in  std_logic;
         reset      : in  std_logic;
         rx_line    : in  std_logic;
-        rx_data    : out unsigned(7 downto 0);
-        rx_ready   : out std_logic
+        rx_data    : out STD_LOGIC_VECTOR(7 downto 0);
+        rx_ready   : out std_logic;
+        parity_enable : in std_logic; -- parity_enable = 0 er slukket for parity, og tændte for = 1
+        parity_m : in std_logic -- parity_m = 0 er even parity, parity_m = 1 er odd parity
     );
 end RX;
 
 architecture rtl of RX is
 
-    type Rstate is (IDLE, START, DATA, STOP);
+    type Rstate is (IDLE, START, DATA, PARITY,STOP);
     signal state, next_state : Rstate;
 
     signal rx_sync_1, rx_sync_2 : std_logic; -- 2ff
 
-    signal shift_reg : unsigned(7 downto 0);
+    signal shift_reg : STD_LOGIC_VECTOR(7 downto 0);
     signal bit_count : integer range 0 to 7;
 
 -- 
@@ -34,29 +36,26 @@ architecture rtl of RX is
     signal shift_en     : std_logic; -- Tillader shift
     signal done_sample  : std_logic; -- Færdig med at sample
     signal parity_valid : std_logic; -- Parity_valid = 0 
+    signal sample_parity : std_logic; -- Flag til at sample
 
 -- Parity signaler
     signal paritys : std_logic; -- beregnet parity værdi
-    signal parity_m : std_logic; -- parity_m = 0 er even parity, parity_m = 1 er odd parity
     signal paritys_sampled : std_logic; -- Samplet parity værdi
+
+
     
     -- Parity Funktion (bare så det ikke bliver så skide grimt....)
-    function parity (data: std_logic_vector) return std_logic is variable p : std_logic := '0';
+    function parity_check (data: std_logic_vector; parity_bit: STD_LOGIC; parity_mode: STD_LOGIC ) return BOOLEAN is variable p : std_logic := '0';
     begin
         for i in data'range loop
             p := p xor data(i);
         end loop;
-        return p;
-    end function;
 
-    function parity_mode (parity_p: std_logic; parity_mode: std_logic) return std_logic is variable parity_eoo : std_logic := '0';
-    begin
-        if parity_mode = '0' then
-            parity_eoo := parity_p;
-        elsif parity_mode = '1' then
-            parity_eoo := not parity_p;
+        if parity_mode = '1' then -- Odd
+            p := not p; 
         end if;
-        return parity_eoo;
+
+        return (p=parity_bit);
     end function;
 
 begin
@@ -99,6 +98,7 @@ begin
             bit_count    <= 0;
             sample_count <= 0;
             rx_data      <= (others=>'0');
+            paritys <= '0';
 
         elsif rising_edge(clk) then
             state <= next_state;
@@ -122,10 +122,20 @@ begin
                     shift_reg <= rx_sync_2 & shift_reg(7 downto 1); -- Concatetion (tror det hedder det)
                     bit_count <= bit_count + 1; -- bit_count styring
                 end if;
+                if sample_parity = '1' then 
+                    paritys <= rx_sync_2; 
 
+                end if;
                 -- rx_data bliver kun til hele shift_reg når sampling er færdig
                 if done_sample='1' then
                     rx_data <= shift_reg;
+                    if parity_enable = '1' then
+                        if parity_check(rx_data, paritys, parity_m) then
+                            parity_valid <= '1';
+                        else
+                            parity_valid <= '0';
+                        end if;
+                    end if;
                 end if;
             end if;
         end if;
@@ -154,15 +164,23 @@ begin
 
             when DATA =>
                 if os_tick='1' and sample_count = 8 then
-                    if bit_count = 7 then
+                    if bit_count = 7 and parity_enable = '0' then
                         next_state <= STOP;
+                    elsif bit_count = 7 and parity_enable = '1' then
+                        next_state <= PARITY;
                     end if;
+                end if;
+
+            when PARITY =>
+                if os_tick = '1' and sample_count = 8 then
+                    next_state <= STOP;
                 end if;
 
             when STOP =>
                 if os_tick='1' and sample_count = 8 then
                     next_state <= IDLE;
                 end if;
+
         end case;
     end process;
 
@@ -182,6 +200,12 @@ begin
                 if os_tick='1' and sample_count = 8 then
                     shift_en <= '1';
                 end if;
+
+            when PARITY =>
+                if os_tick= '1' and sample_count = 8 then
+                    sample_parity <= '1';
+                end if;
+
             when STOP =>
                 if os_tick='1' and sample_count = 8 then
                     rx_ready    <= '1';
