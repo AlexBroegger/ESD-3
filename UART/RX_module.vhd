@@ -4,14 +4,14 @@ use ieee.numeric_std.all;
 
 entity RX is
     port (
-        clk        : in  std_logic;
-        reset      : in  std_logic;
-        rx_line    : in  std_logic;
-        rx_data    : out STD_LOGIC_VECTOR(7 downto 0);
-        rx_ready   : out std_logic;
+        clk        : in  std_logic; -- Giver sig selv
+        reset      : in  std_logic; -- Reset knap, den skal bare være der
+        rx_line    : in  std_logic; -- Incoming fra TX line
+        rx_data    : out STD_LOGIC_VECTOR(7 downto 0); -- Bliver samplet med shift register
+        rx_ready   : out std_logic; -- Bare om han er klar
         parity_enable : in std_logic; -- parity_enable = 0 er slukket for parity, og tændte for = 1
         parity_m : in std_logic; -- parity_m = 0 er even parity, parity_m = 1 er odd parity
-        parity_valid : out std_logic
+        parity_valid : out std_logic -- parity_valid = 0, fanget parity bit er falsk, ellers er det sandt
     );
 end RX;
 
