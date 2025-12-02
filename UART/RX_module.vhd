@@ -10,12 +10,13 @@ entity RX is
         rx_data    : out STD_LOGIC_VECTOR(7 downto 0);
         rx_ready   : out std_logic;
         parity_enable : in std_logic; -- parity_enable = 0 er slukket for parity, og tændte for = 1
-        parity_m : in std_logic -- parity_m = 0 er even parity, parity_m = 1 er odd parity
+        parity_m : in std_logic; -- parity_m = 0 er even parity, parity_m = 1 er odd parity
+        parity_valid : out std_logic
     );
 end RX;
 
 architecture rtl of RX is
-
+-- States
     type Rstate is (IDLE, START, DATA, PARITY,STOP);
     signal state, next_state : Rstate;
 
@@ -24,7 +25,7 @@ architecture rtl of RX is
     signal shift_reg : STD_LOGIC_VECTOR(7 downto 0);
     signal bit_count : integer range 0 to 7;
 
--- 
+-- Sample 
     constant oversample       : integer := 16; -- Vores valgte oversampling rate. Vi har 16 gange oversampling
     constant clock_p_16x      : integer := 78 ; -- Dette er 12MHz/(9600*16)=78.125, og vi runder ned. Dette betyder der kommer lidt tidsdrift
     signal os_count           : integer range 0 to 77; -- Tæller op til
@@ -35,7 +36,6 @@ architecture rtl of RX is
 -- flag signaler
     signal shift_en     : std_logic; -- Tillader shift
     signal done_sample  : std_logic; -- Færdig med at sample
-    signal parity_valid : std_logic; -- Parity_valid = 0 
     signal sample_parity : std_logic; -- Flag til at sample
 
 -- Parity signaler
@@ -55,7 +55,7 @@ architecture rtl of RX is
             p := not p; 
         end if;
 
-        return (p=parity_bit);
+        return (p = parity_bit);
     end function;
 
 begin
@@ -75,7 +75,7 @@ begin
     -- Oversamplings count. Lidt ligesom baud generator, men den kører 16 gange hurtigere, dette bliver vores nye baud_tick. Det vil sige at 16 af disse giver 16 ticks.
     os_baud : process(clk, reset)
     begin
-        if reset='1' then
+        if reset = '1' then
             os_count <= 0;
             os_tick  <= '0';
         elsif rising_edge(clk) then
@@ -130,7 +130,7 @@ begin
                 if done_sample='1' then
                     rx_data <= shift_reg;
                     if parity_enable = '1' then
-                        if parity_check(rx_data, paritys, parity_m) then
+                        if parity_check(shift_reg, paritys, parity_m) then
                             parity_valid <= '1';
                         else
                             parity_valid <= '0';
@@ -190,6 +190,7 @@ begin
         rx_ready    <= '0';
         shift_en    <= '0';
         done_sample <= '0';
+        sample_parity <= '0';
 
         case state is
             when IDLE =>
