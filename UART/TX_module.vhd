@@ -3,154 +3,153 @@ use IEEE.STD_LOGIC_1164.ALL;
 use ieee.numeric_std.all;
 
 entity TX is
-
-	port (
-	clk : in std_logic;
-	reset : in std_logic;
-	data_available : in std_logic;
-	tx_line : out std_logic;
-	tx_data : in unsigned(7 downto 0);
-	tx_busy : out std_logic
-	);
-	
+    port (
+        clk            : in  std_logic;
+        reset          : in  std_logic;
+        data_available : in  std_logic;
+        tx_line        : out std_logic;
+        tx_data        : in  STD_LOGIC_VECTOR(7 downto 0);
+        tx_busy        : out std_logic
+    );
 end TX;
 
 architecture rtl of TX is
 
-	-- Defintion af States
-	TYPE Tstate IS (IDLE, START, DATA, STOP); -- States: Intet parity, 1 stop bit og 8 data bits.
-	SIGNAL state: Tstate;
-	SIGNAL next_state: Tstate;
-	
-	-- Signaler til at shifte bits ud til tx_linje, og tælle dem
-	SIGNAL shift_reg: unsigned(7 downto 0); 
-	SIGNAL bit_count: integer range 0 to 7; -- Counter til state transition
-	
-	-- Klok signaler
-	constant clock_p_bit : integer := 1250; --12000000/9600 = 12MHz/9600 baud rate = 1250
-	signal baud_count : integer range 0 to clock_p_bit-1; -- Baud counter, som bruges til at tælle op til 1249
-	signal baud_tick : std_logic; -- Når baud counter kommer op til 1250, bliver baud_tick slået til logisk 1.
-	signal baud_reset: std_logic; -- Reset signal
-	
+    
+    type Tstate is (IDLE, START, DATA, STOP);
+    signal state, next_state : Tstate;
+
+   
+    signal shift_reg : STD_LOGIC_VECTOR(7 downto 0);
+    signal bit_count : integer range 0 to 7;
+
+    
+    constant clock_p_bit : integer := 1250;
+    signal baud_count : integer range 0 to clock_p_bit-1;
+    signal baud_tick  : std_logic;
+    signal baud_reset : std_logic;
+
+    
+    signal load_shift  : std_logic;
+    signal shift_enable: std_logic;
+
 begin
 
-	baudgen: process(clk,reset) -- logik til baud rate generator.
-	begin 
-		if reset = '1' then
-			baud_count <= 0;
-			baud_tick <= '0';
+    
+    baudgen : process(clk, reset)
+    begin
+        if reset = '1' then
+            baud_count <= 0;
+            baud_tick  <= '0';
 
-		elsif rising_edge(clk) then -- hvert rising edge
-			baud_tick <= '0';
-			
-			if baud_reset = '1' then 
-			    baud_count <= 1;  -- Start paa 1 saa timing faktisk passer (Som det gør nu)
-			    baud_tick <= '0';
-			elsif baud_count = clock_p_bit-1 then
-				baud_count <= 0;
-				baud_tick <= '1';
-			else 
-				baud_count <= baud_count +1;
-			end if;
-		end if;
-	
-	end process baudgen;
+        elsif rising_edge(clk) then
+            baud_tick <= '0';
 
-	baud_reset <= '1' when (next_state = START and state = IDLE and data_available = '1') else '0'; -- Lidt klamt, men det fungere
-	
-	logic_reg: process(clk, reset) -- Sekventiel logik og data path
-	begin
-	
-		IF reset = '1' then
-			state <= IDLE;
-			shift_reg <= (others => '0');
-			bit_count <= 0;
+            if baud_reset = '1' then
+                baud_count <= 1;
+            elsif baud_count = clock_p_bit-1 then
+                baud_count <= 0;
+                baud_tick  <= '1';
+            else
+                baud_count <= baud_count + 1;
+            end if;
+        end if;
+    end process;
+
+    baud_reset <= '1' when (next_state = START and state = IDLE and data_available = '1')
+    	else '0';
+    reg_proc : process(clk, reset)
+    begin
+        if reset = '1' then
+            state      <= IDLE;
+            shift_reg  <= (others => '0');
+            bit_count  <= 0;
             
-			
-		ELSIF rising_edge(clk) then
-			state <= next_state;
-			CASE state IS
+        elsif rising_edge(clk) then
+            
+            state <= next_state;
+            if load_shift = '1' then
+                shift_reg <= tx_data;
+                bit_count <= 0;
 
-                
-            WHEN DATA =>
-                if baud_tick = '1' then
-                    shift_reg <= '0' & shift_reg(7 downto 1);
-                    bit_count <= bit_count + 1;
-                end if;
-                
-            WHEN IDLE =>
+            elsif shift_enable = '1' then
+                shift_reg <= '0' & shift_reg(7 downto 1);
+                bit_count <= bit_count + 1;
+            end if;
+        end if;
+    end process;
+
+
+    
+    next_state_proc : process(state, data_available, bit_count, baud_tick)
+    begin
+        case state is
+
+            when IDLE =>
                 if data_available = '1' then
-                    shift_reg <= tx_data;
-                    bit_count <= 0;
+                    next_state <= START;
+                else
+                    next_state <= IDLE;
                 end if;
-                
-          
-            WHEN others =>
-                NULL;
-					
-			end CASE;
-		end if;
-	end process logic_reg;
-	
-	next_state_proc : process (state, data_available, bit_count, baud_tick) -- Logik til state transition
-	begin
-        
-		case state IS
-		
-			WHEN IDLE => -- IDLE state transition
-				if data_available = '1' then
-				    
-					next_state <= START;
-					
-				else
-					next_state <= IDLE;
-				end if;
-				
-			WHEN START => -- START state transition
-			    
-				if baud_tick = '1' then
-					next_state <= DATA;
-                else
-					next_state <= START;
-				end if;
-				
-			WHEN DATA => -- DATA state transition
-			
-				if bit_count = 7 and baud_tick='1' then
-					next_state <= STOP;
-				else
-					next_state <= DATA;
-				end if;
-				
-			WHEN STOP => -- STOP state transition
-			
-				if baud_tick = '1' THEN
-					next_state <= IDLE;
-                else
-					next_state <= STOP;
-				end if;
-				
-		end case;
-		
-	end process next_state_proc;
-	
-	state_output: process (state, shift_reg) -- kombinatorisk Logik til state output
-	begin
-		case state IS
-			WHEN IDLE =>
-				tx_line <= '1';
-				tx_busy <= '0'; -- Ikke busy fordi der ikke skal ske noget på tx_linje
-			WHEN START =>
-				tx_line <= '0';
-				tx_busy <= '1';
-			WHEN DATA =>
-				tx_line <= shift_reg(0);
-				tx_busy <= '1';
-			WHEN STOP =>
-				tx_line <= '1';
-				tx_busy <= '1';
-		end case;
 
-	end process state_output;
+            when START =>
+                if baud_tick = '1' then
+                    next_state <= DATA;
+                else
+                    next_state <= START;
+                end if;
+
+            when DATA =>
+                if bit_count = 7 and baud_tick = '1' then
+                    next_state <= STOP;
+                else
+                    next_state <= DATA;
+                end if;
+
+            when STOP =>
+                if baud_tick = '1' then
+                    next_state <= IDLE;
+                else
+                    next_state <= STOP;
+                end if;
+
+        end case;
+    end process;
+
+
+    
+    state_output : process(state, shift_reg, data_available, baud_tick)
+    begin
+      
+        tx_line      <= '1';
+        tx_busy      <= '1';
+        load_shift   <= '0';
+        shift_enable <= '0';
+
+        case state is
+
+            when IDLE =>
+                tx_line <= '1';
+                tx_busy <= '0';
+
+                if data_available = '1' then
+                    load_shift <= '1';
+                end if;
+
+            when START =>
+                tx_line <= '0';
+
+
+            when DATA =>
+                tx_line <= shift_reg(0);
+                if baud_tick = '1' then
+                    shift_enable <= '1';
+                end if;
+
+            when STOP =>
+                tx_line <= '1';
+
+        end case;
+    end process;
 
 end rtl;
