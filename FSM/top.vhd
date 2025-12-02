@@ -39,7 +39,7 @@ entity top is
            SPI_ID_VALID : in STD_LOGIC;
            UART_PONG : in STD_LOGIC;
            -- System kontrol
-           clk : in STD_LOGIC; -- system clock, nok omkring 10ns
+           clk : in STD_LOGIC; -- 12MHz system clock
            DEVICE_PRESENT : in STD_LOGIC; -- Frakoblings-detektion pin sat til pull up resistor, sat til GND af forbundet enhed
            rst : in STD_LOGIC;
            -- Pin konfigurering: 00 = højimpedans, 01 = I2C, 10 = SPI, 11 = UART
@@ -54,11 +54,11 @@ end top;
 
 architecture Behavioral of top is
 
--- I2C ting
+-- I2C ting for simulering... ignore
 -- KONSTANTER FOR KOMMUNIKATION
-CONSTANT C_SYS_CLK_HZ : INTEGER := 100_000_000; -- Antager 100 MHz system clock, da clk er 10ns (1/(10e-9) = 100 MHz)
+CONSTANT C_SYS_CLK_HZ : INTEGER := 12_000_000; -- 12MHz
 CONSTANT C_I2C_BUS_HZ : INTEGER := 400_000;    -- I2C Fast Mode hastighed (400 kHz)
-CONSTANT C_TEST_I2C_ADDR : STD_LOGIC_VECTOR(6 DOWNTO 0) := "1010000"; -- Testadresse (eksempel: 0x50/80 decimal)
+CONSTANT C_TEST_I2C_ADDR : STD_LOGIC_VECTOR(6 DOWNTO 0) := "1010000";
 
 -- I2C KONTROL- OG DATA-SIGNALER
 signal I2C_MASTER_BUSY : STD_LOGIC := '0';
@@ -91,9 +91,9 @@ signal SPI_START_CMD : STD_LOGIC;
 signal UART_START_CMD : STD_LOGIC;
 
 -- Timing (lidt arbitrært valgte værdier)
-constant I2C_TIMEOUT_MAX : natural := 10000; -- med 10ns clk -> 100us
-constant SPI_TIMEOUT_MAX : natural := 5000; -- med 10ns clk -> 50us
-constant UART_TIMEOUT_MAX : natural := 100000; -- med 10ns clk -> 1ms [afhænger af UART detektion, i.e hvilket signal, 1ms er ikke sikker på]
+constant I2C_TIMEOUT_MAX : natural := 1200;    -- **100 us** ved 12 MHz
+constant SPI_TIMEOUT_MAX : natural := 600;     -- **50 us** ved 12 MHz
+constant UART_TIMEOUT_MAX : natural := 12000;  -- **1 ms** ved 12 MHz
 
 signal timeout_counter : natural range 0 to  UART_TIMEOUT_MAX :=0; -- Range sat til største timeout konstant, synthesizer til logic vector af krævet bits
 signal timeout_expired : std_logic := '0';
@@ -103,7 +103,7 @@ signal timeout_expired : std_logic := '0';
 begin
 
 -- -----------------------------------------------------------------
--- I2C MASTER INSTANSIERING (Modul 2)
+-- I2C MASTER INSTANSIERING (Modul 2) til simulering... 
 -- -----------------------------------------------------------------
 I2C_MASTER_INST : ENTITY WORK.i2c_master
 GENERIC MAP(
@@ -175,33 +175,36 @@ end process;
 
 
 -- Next-state logic
-process(state_reg, clk)
+process(state_reg, I2C_ACK, I2C_NACK, timeout_expired,
+    SPI_ID_VALID, UART_PONG)
 begin
     case state_reg is
         when IDLE => 
             state_next <= TEST_I2C;
         
-        when TEST_I2C =>
-            if I2C_MASTER_BUSY = '0' then
-                if I2C_MASTER_ACK_ERROR = '0' then
-                    state_next <= ACTIVE_I2C;
-                elsif I2C_MASTER_ACK_ERROR = '1' or timeout_expired = '1' then
-                    state_next <= TEST_SPI;            
-                else
-                    state_next <= TEST_SPI; -- fallback
-                end if;
-                    
-            else -- hvis ikke busy
+--        when TEST_I2C =>
+--            if I2C_MASTER_BUSY = '0' then
+--                if I2C_MASTER_ACK_ERROR = '0' then
+--                    state_next <= ACTIVE_I2C;
+--                elsif I2C_MASTER_ACK_ERROR = '1' or timeout_expired = '1' then
+--                    state_next <= TEST_SPI;            
+--                else
+--                    state_next <= TEST_SPI; -- fallback
+--                end if;
+
+           when TEST_I2C =>      
+            if I2C_ACK = '1' then
+                state_next <= ACTIVE_I2C;
+            elsif I2C_NACK = '1' or timeout_expired = '1' then
+                state_next <= TEST_SPI;
+            else 
                 state_next <= TEST_I2C;
             end if;
                     
---            if I2C_ACK = '1' then
---                state_next <= ACTIVE_I2C;
---            elsif I2C_NACK = '1' or timeout_expired = '1' then
---                state_next <= TEST_SPI;
---            else 
+--            else -- hvis ikke busy
 --                state_next <= TEST_I2C;
 --            end if;
+
 
         when TEST_SPI =>
             if SPI_ID_VALID = '1' then
