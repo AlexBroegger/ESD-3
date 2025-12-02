@@ -10,7 +10,8 @@ entity projFSM is
         clk      : in  STD_LOGIC;
         reset    : in  STD_LOGIC;
         -- Ekstern I/O (Systemets U_Pin I/O)
-        u_pin_io : inout STD_LOGIC_VECTOR(7 downto 0) 
+        u_pin_io : inout STD_LOGIC_VECTOR(7 downto 0);
+        protocol_active_led : out STD_LOGIC_VECTOR(1 downto 0)
     );
 end projFSM;
 
@@ -43,9 +44,7 @@ architecture Behavioral of projFSM is
 
     component dpr_controller_wrapper is
         Port (
-            --sys_clock         : in    STD_LOGIC; -- ubrugt
             clk               : in   STD_LOGIC; 
-            --clk_100MHz        : out   STD_LOGIC;  -- ubrugt
             reset             : in    STD_LOGIC;
             cfg_sel_in        : in    STD_LOGIC_VECTOR(2 downto 0); 
             cfg_done_out      : out   STD_LOGIC;
@@ -61,6 +60,8 @@ architecture Behavioral of projFSM is
 
     -- 2. KONSTANTER OG SIGNALER
 
+    -- Til LED test ellers ubrugt
+    signal s_protocol_active_led : STD_LOGIC_VECTOR(1 downto 0) := (others => '0');
     
     type T_FSM_STATE is (
         S0_INIT, S1_LOAD_UART, S2_WAIT_LOAD_DONE, S3_TEST_PROTOCOL,
@@ -84,7 +85,6 @@ architecture Behavioral of projFSM is
 
 begin
 
-    -- clk_100MHz <= sys_clock_mmcm;
 
     reconfig_interface_o <= (others => '0') when fsm_rm_trigger = '0'
                             else C_START_CMD;
@@ -93,8 +93,11 @@ begin
     -- 3. STATE MACHINE OG KONTROLLOGIK
 
 
+
     process(clk)
     begin
+    
+    
         if reset = '1' then
             state_reg <= S0_INIT;
         elsif rising_edge(clk) then
@@ -103,18 +106,22 @@ begin
     end process;
 
     
-    process(state_reg, reconfig_interface_i, cfg_done_in, cfg_error_in, rm_shutdown_ack_in)
+    process(state_reg, reconfig_interface_i, cfg_done_in, cfg_error_in, rm_shutdown_ack_in, cfg_sel_out, fsm_rm_trigger, s_protocol_active_led)
     begin
         state_next <= state_reg;
         
+
+        
         cfg_sel_out    <= (others => '0');
         fsm_rm_trigger <= '0';
+
 
         case state_reg is
             
             when S0_INIT =>
                 state_next <= S1_LOAD_UART;
-
+                
+                
             when S1_LOAD_UART | S5_LOAD_SPI | S6_LOAD_I2C =>
                 
                 if state_reg = S1_LOAD_UART then 
@@ -124,8 +131,9 @@ begin
                 elsif state_reg = S6_LOAD_I2C then 
                     cfg_sel_out <= "001";
                 end if;
-
+               
                 state_next <= S2_WAIT_LOAD_DONE; 
+
 
             when S2_WAIT_LOAD_DONE =>
                 if cfg_done_in = '1' and cfg_error_in = '0' then
@@ -134,7 +142,9 @@ begin
                     state_next <= S8_ERROR;
                 end if;
 
+
             when S3_TEST_PROTOCOL =>
+                s_protocol_active_led <= "01"; -- til test 
                 fsm_rm_trigger <= '1'; 
                 state_next <= S4_CHECK_RESULT;
 
@@ -171,6 +181,8 @@ begin
 
 
     -- 4. INSTANSIERINGER
+
+    protocol_active_led <= s_protocol_active_led; -- til LED test
 
     -- IP interface
     dpr_bd_wrapper_inst : dpr_controller_wrapper
