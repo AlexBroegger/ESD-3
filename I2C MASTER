@@ -1,0 +1,318 @@
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity I2C_Master is
+    Port ( 
+        clk       : in std_logic; 
+        reset     : in std_logic;
+---------------------------------CONTROL PORT----------------------------------------- 
+        ena       : in std_logic; -- 1 start
+        rw        : in std_logic; -- 1 read, 0 write 
+        s_addr    : in std_logic_vector(6 downto 0); --7bit slave address 
+        write_in  : in  std_logic_vector(7 downto 0); -- data for write 
+        new_input : out std_logic; 
+-----------------------------------------------------------------------------------            
+        read_out  : out std_logic_vector(7 downto 0); -- data for read
+        busy      : out std_logic;    
+        ack_error : out std_logic;
+        sda       : inout std_logic;
+        scl       : inout std_logic
+    );
+end I2C_Master;
+
+architecture Behavioral of I2C_Master is
+    type I2C_states is (IDLE, START, SLAVE, ACKS, READ, WRITE, ACKS2, ACKM, STOP);
+    signal state, next_state : I2C_states; 
+
+    signal clk_cnt  : unsigned(8 downto 0) := (others => '0');
+    signal scl_tick : std_logic := '0'; 
+    signal scl_tick_ena : std_logic := '0'; 
+    signal scl_wait_cnt : unsigned(8 downto 0) := (others => '0'); 
+
+    signal sda_out, scl_out : std_logic := '1'; 
+    signal sda_in : std_logic;
+
+    signal write_byte : std_logic_vector(7 downto 0); 
+    signal read_byte  : std_logic_vector(7 downto 0); 
+    signal s_addr_rw  : std_logic_vector(7 downto 0); 
+
+    signal bit_cnt  : integer range 0 to 7 := 0;
+
+    -- Needed for merging scl_tick edge logic
+    signal scl_tick_prev : std_logic := '0';
+    signal scl_tick_rise : std_logic := '0';
+    signal scl_tick_fall : std_logic := '0';
+
+    signal ack_s : std_logic := '0';
+    signal ack_error_signal : std_logic := '0';
+
+begin
+
+    ------------------------------------------------------------------------
+    -- Open drain
+    ------------------------------------------------------------------------
+    sda <= '0' when sda_out = '0' else 'Z';
+    scl <= '0' when scl_out = '0' else 'Z';
+    sda_in <= sda;
+
+    ack_error <= ack_error_signal;
+    read_out  <= read_byte;
+
+    ------------------------------------------------------------------------
+    -- Clock divider
+    ------------------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            clk_cnt  <= (others => '0');
+            scl_tick <= '0';
+        elsif rising_edge(clk) then
+            if scl_tick_ena = '1' then
+                if clk_cnt = 59 then
+                    clk_cnt  <= (others => '0');
+                    scl_tick <= not scl_tick;
+                else
+                    clk_cnt <= clk_cnt + 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    ------------------------------------------------------------------------
+    -- State register
+    ------------------------------------------------------------------------
+    process(clk, reset)
+    begin
+        if reset = '1' then
+            state <= IDLE;
+        elsif rising_edge(clk) then
+            state <= next_state;
+        end if;
+    end process;
+
+    ------------------------------------------------------------------------
+    -- MAIN FSM (merged scl_tick rise/fall logic)
+    ------------------------------------------------------------------------
+    process(clk, reset)
+    begin 
+        if reset = '1' then 
+
+            next_state   <= IDLE; 
+            busy         <= '0'; 
+            scl_out      <= '1'; 
+            sda_out      <= '1'; 
+            bit_cnt      <= 7;
+            write_byte   <= (others => '0');
+            read_byte    <= (others => '0'); 
+            scl_wait_cnt <= (others => '0');
+            scl_tick_ena <= '0';
+            ack_s        <= '0'; 
+            ack_error_signal <= '0';
+            scl_tick_prev <= '0';
+
+        elsif rising_edge(clk) then 
+
+            ----------------------------------------------------------------
+            -- detect rising/falling edges of scl_tick
+            ----------------------------------------------------------------
+            scl_tick_rise <= '0';
+            scl_tick_fall <= '0';
+
+            if scl_tick_prev = '0' and scl_tick = '1' then
+                scl_tick_rise <= '1';
+            elsif scl_tick_prev = '1' and scl_tick = '0' then
+                scl_tick_fall <= '1';
+            end if;
+
+            scl_tick_prev <= scl_tick;
+
+            ----------------------------------------------------------------
+            -- MAIN FSM
+            ----------------------------------------------------------------
+            case state is 
+
+                ----------------------------------------------------------------
+                -- IDLE
+                ----------------------------------------------------------------
+                when IDLE =>
+                    busy        <= '0';
+                    scl_out     <= '1';
+                    sda_out     <= '1';
+                    scl_tick_ena <= '0';
+                    scl_wait_cnt <= (others => '0');
+                    new_input <= '1'; -- request new input
+                    
+                    if ena = '1' then 
+                        busy        <= '1';
+                        new_input <= '0'; ---reset signal
+                        s_addr_rw   <= s_addr & rw;
+                        write_byte  <= write_in;
+                        next_state  <= START;
+                    else
+                        new_input <= '1'; -- sender et signal til komando fifo der insætter en nye værdi for ena, rw, s_addr, write_in,
+                        next_state  <= IDLE;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- START
+                ----------------------------------------------------------------
+                when START =>
+                    scl_out <= '1';
+                    sda_out <= '0';
+                    s_addr_rw <= s_addr & rw; 
+                    write_byte <= write_in; 
+                    if scl_wait_cnt = 50 then
+                        scl_wait_cnt <= (others => '0');
+                        scl_tick_ena <= '1';
+                        next_state   <= SLAVE;
+                    else
+                        scl_wait_cnt <= scl_wait_cnt + 1;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- SLAVE  
+                ----------------------------------------------------------------
+                when SLAVE =>   
+                    if scl_tick_fall = '1' then
+                        write_byte <= s_addr_rw;
+                        sda_out <= write_byte(bit_cnt);
+
+                        if bit_cnt = 0 then
+                            bit_cnt <= 7;
+                            next_state <= ACKS;
+                        else
+                            bit_cnt <= bit_cnt - 1;
+                        end if;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- ACKS  
+                ----------------------------------------------------------------
+                when ACKS =>
+                    if scl_tick_rise = '1' then
+                        if sda_in = '0' then
+                            ack_s <= '1';
+                            ack_error_signal <= '0';
+                        else
+                            ack_s <= '1';
+                            ack_error_signal <= '1';
+                        end if;
+                    else 
+                        if ack_error_signal = '1' then
+                            next_state <= STOP;
+                        elsif ack_s = '1' then
+                            ack_s <= '0';
+                            if rw = '1' then 
+                               next_state <= READ;
+                            else 
+                               next_state <= WRITE;
+                            end if;
+                        end if;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- WRITE  
+                ----------------------------------------------------------------
+                when WRITE =>
+                    new_input <= '1'; -- update ena, rw, s_addr, write_in
+                    if scl_tick_fall = '1' then
+                        sda_out <= write_byte(bit_cnt);
+                        if bit_cnt = 0 then
+                            bit_cnt <= 7;
+                            next_state <= ACKS2;
+                        else
+                            bit_cnt <= bit_cnt - 1;
+                        end if;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- ACKS2  
+                ----------------------------------------------------------------
+                when ACKS2 =>
+                write_byte <= write_in; -- update write_byte 
+                new_input <= '0'; 
+                    if scl_tick_rise = '1' then
+                        if sda_in = '0' then
+                            ack_s <= '1';
+                            ack_error_signal <= '0';
+                        else
+                            ack_s <= '1';
+                            ack_error_signal <= '1';
+                        end if;
+
+                        if ack_error_signal = '1' then
+                            next_state <= STOP;
+                        elsif ack_s = '1' then
+                            ack_s <= '0';
+                            if s_addr_rw = s_addr & rw then 
+                               next_state <= WRITE;
+                            else 
+                               next_state <= START;
+                            end if;
+                        end if;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- READ  
+                ----------------------------------------------------------------
+                when READ =>
+                    new_input <= '1'; 
+                    if scl_tick_rise = '1' then
+                        sda_out <= '0';
+                        read_byte(bit_cnt) <= sda_in;
+
+                        if bit_cnt = 0 then 
+                            bit_cnt <= 7; 
+                            next_state <= ACKM;
+                        else
+                            bit_cnt <= bit_cnt - 1; 
+                        end if;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- ACKM  
+                ----------------------------------------------------------------
+                when ACKM =>
+                new_input <= '0'; 
+                    if scl_tick_fall = '1' then
+                        if s_addr_rw = s_addr & rw then
+                           sda_out <= '0';
+                           ack_s   <= '1';
+                        else
+                           sda_out <= '1';
+                           ack_s   <= '0';
+                        end if;
+                    elsif scl_tick_rise = '1' then
+                        if ena = '1' and ack_s = '1' then
+                            ack_s <= '0';
+                            next_state <= READ;
+                        else
+                            ack_s <= '0';
+                            next_state <= STOP;
+                        end if;
+                    end if;
+
+                ----------------------------------------------------------------
+                -- STOP
+                ----------------------------------------------------------------
+                when STOP =>
+                    scl_out <= '1';
+                    scl_tick_ena <= '0';
+                    new_input <= '0'; 
+                    if scl_wait_cnt = 50 then
+                        sda_out <= '1';
+                        scl_wait_cnt <= (others => '0');
+                        busy <= '0';
+                        next_state <= IDLE;
+                    else
+                        sda_out <= '0';
+                        scl_wait_cnt <= scl_wait_cnt + 1;
+                    end if;
+
+            end case;
+        end if;
+    end process;
+
+end Behavioral;
