@@ -1,0 +1,232 @@
+----------------------------------------------------------------------------------
+-- Module Name: top - Behavioral (Autodetection based on fixed RX pins)
+----------------------------------------------------------------------------------
+
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity top is
+    Port ( 
+        -- System kontrol
+        clk : in STD_LOGIC; -- 12MHz system clock
+        DEVICE_PRESENT : in STD_LOGIC; -- Frakoblings-detektion pin
+        rst : in STD_LOGIC;
+        
+        -- DEDIKEREDE/FASTE RX LINJER TIL DETEKTION
+        -- Disse monitoreres konstant i IDLE state
+        I2C_SDA_IN : in STD_LOGIC;  -- Input for SDA (til at detektere START)
+        SPI_MOSI_IN : in STD_LOGIC; -- Input for MOSI (til at detektere dataoverførsel)
+        UART_RX_IN : in STD_LOGIC;  -- Input for RX (til at detektere Start Bit)
+
+        -- Pin konfigurering: 00 = højimpedans, 01 = I2C, 10 = SPI, 11 = UART
+        MUX_SELECT : out STD_LOGIC_VECTOR(1 downto 0);
+        
+        -- Universal pins (REDUCERET TIL 3)
+        U_Pin_1 : inout STD_LOGIC; 
+        U_Pin_2 : inout STD_LOGIC;
+        U_Pin_3 : inout STD_LOGIC
+    );
+end top;
+
+architecture Behavioral of top is
+
+
+-- State Machine
+type fsm_state_type is (IDLE_MONITOR, ACTIVE_I2C, ACTIVE_SPI, ACTIVE_UART);
+signal state_reg, state_next : fsm_state_type := IDLE_MONITOR;
+
+-- Detection Signals (Aktiv high for detekteret aktivitet)
+signal I2C_ACTIVITY_DETECTED : STD_LOGIC := '0';
+signal SPI_ACTIVITY_DETECTED : STD_LOGIC := '0';
+signal UART_ACTIVITY_DETECTED : STD_LOGIC := '0';
+
+-- Intern MUX-selektionssignal
+signal MUX_SELECT_SIGNAL : STD_LOGIC_VECTOR(1 downto 0);
+
+-- Protokol I/O (Bliver mappet til Universal Pins)
+-- I2C: SCL (U_Pin_1), SDA_TX (U_Pin_2)
+signal I2C_SDA_TX : STD_LOGIC := 'Z'; 
+signal I2C_SCL_SIGNAL : STD_LOGIC := 'Z'; 
+
+-- SPI: SCLK (U_Pin_1), MISO_TX (U_Pin_2), SS (U_Pin_3)
+signal SPI_SCLK_SIGNAL : STD_LOGIC := 'Z';
+signal SPI_MISO_TX : STD_LOGIC := 'Z'; 
+signal SPI_SS_SIGNAL : STD_LOGIC := 'Z';
+
+-- UART: TX (U_Pin_1)
+signal UART_TX_SIGNAL : STD_LOGIC := 'Z';
+
+-- Edge Detection Register
+signal i2c_sda_prev : STD_LOGIC := '1'; -- Antag pull-up i IDLE
+signal spi_mosi_prev : STD_LOGIC := '1';
+signal uart_rx_prev : STD_LOGIC := '1';
+
+begin
+
+-- -----------------------------------------------------------------
+-- KANT-/AKTIVITETSDETEKTION (IDLE_MONITOR State)
+-- Disse processer løber altid, men bruges kun til transition fra IDLE
+-- -----------------------------------------------------------------
+
+PROCESS (clk)
+BEGIN
+    IF rising_edge(clk) THEN
+        i2c_sda_prev <= I2C_SDA_IN;
+        spi_mosi_prev <= SPI_MOSI_IN;
+        uart_rx_prev <= UART_RX_IN;
+
+        -- I2C Detection: START condition (SDA går LAV mens SCL er HØJ)
+        -- Laver en simpel detektion på en faldende kant på SDA_IN
+        IF I2C_SDA_IN = '0' AND i2c_sda_prev = '1' THEN
+            I2C_ACTIVITY_DETECTED <= '1';
+        ELSE
+            I2C_ACTIVITY_DETECTED <= '0';
+        END IF;
+
+        -- SPI Detection: Aktivitet på MOSI (input til FPGA). Enten HØJ eller LAV.
+        -- Detekterer en simpel ændring i MOSI-signalet.
+        IF SPI_MOSI_IN /= spi_mosi_prev THEN
+            SPI_ACTIVITY_DETECTED <= '1';
+        ELSE
+            SPI_ACTIVITY_DETECTED <= '0';
+        END IF;
+        
+        -- UART Detection: Start Bit (Faldende kant på RX-linjen)
+        IF UART_RX_IN = '0' AND uart_rx_prev = '1' THEN
+            UART_ACTIVITY_DETECTED <= '1';
+        ELSE
+            UART_ACTIVITY_DETECTED <= '0';
+        END IF;
+
+    END IF;
+END PROCESS;
+
+
+-- -----------------------------------------------------------------
+-- STATE REGISTER
+-- -----------------------------------------------------------------
+process(clk, rst)
+begin 
+    if (rst = '1') or DEVICE_PRESENT = '1' then -- asynkron reset eller hardware disconnect
+        state_reg <= IDLE_MONITOR;
+    elsif rising_edge(clk) then
+        state_reg <= state_next;    
+    end if;
+end process;
+
+
+-- -----------------------------------------------------------------
+-- NEXT-STATE LOGIC (Hjertet i autodetection)
+-- -----------------------------------------------------------------
+process(state_reg, I2C_ACTIVITY_DETECTED, SPI_ACTIVITY_DETECTED, UART_ACTIVITY_DETECTED)
+begin
+    state_next <= state_reg; -- Default: bliv i nuværende state
+    
+    case state_reg is
+        
+        when IDLE_MONITOR => 
+            -- Tjek de faste RX linjer samtidigt:
+            if I2C_ACTIVITY_DETECTED = '1' then
+                state_next <= ACTIVE_I2C;
+            elsif SPI_ACTIVITY_DETECTED = '1' then
+                state_next <= ACTIVE_SPI;
+            elsif UART_ACTIVITY_DETECTED = '1' then
+                state_next <= ACTIVE_UART;
+            else
+                state_next <= IDLE_MONITOR; -- Bliv og monitorer
+            end if;
+        
+        -- Når vi er aktive, låses protokollen, indtil RESET/DISCONNECT (DEVICE_PRESENT)
+        when ACTIVE_I2C | ACTIVE_SPI | ACTIVE_UART =>
+            state_next <= state_reg;
+    
+        when others =>
+            state_next <= IDLE_MONITOR;
+    end case;
+end process;
+
+
+
+-- MEALY OUTPUT LOGIC (Konfigurerer Universal Pins)
+
+process(state_reg)
+begin
+
+    -- Sæt alle interne protokoludgange til højimpedans som default i IDLE
+    I2C_SCL_SIGNAL <= 'Z';
+    I2C_SDA_TX <= 'Z';
+    SPI_SCLK_SIGNAL <= 'Z';
+    SPI_MISO_TX <= 'Z';
+    SPI_SS_SIGNAL <= 'Z';
+    UART_TX_SIGNAL <= 'Z';
+
+    MUX_SELECT <= "00"; -- Default til højimpedans for MUX (kan ændres i implementeringen)
+    
+    case state_reg is
+        
+        when IDLE_MONITOR =>
+            -- Vigtigt: MUX_SELECT_SIGNAL er "00", alle Universal Pins er 'Z' (se MUX processen)
+            MUX_SELECT_SIGNAL <= "00";
+        
+        when ACTIVE_I2C =>
+            MUX_SELECT_SIGNAL <= "01";
+            -- SCL skal drives aktivt/open-drain af protokoldelen
+            -- SDA er bi-directional (behandles i MUX processen)
+            
+        when ACTIVE_SPI => 
+            MUX_SELECT_SIGNAL <= "10";
+            -- SCLK, MISO_TX, SS skal drives aktivt
+            
+        when ACTIVE_UART =>
+            MUX_SELECT_SIGNAL <= "11";
+            -- TX skal drives aktivt
+    
+    end case;    
+
+end process;
+
+
+-- MUX LOGIK: Mappning af Universal Pins
+
+process(MUX_SELECT_SIGNAL, I2C_SCL_SIGNAL, I2C_SDA_TX, SPI_SCLK_SIGNAL, SPI_MISO_TX, SPI_SS_SIGNAL, UART_TX_SIGNAL)
+begin
+
+    -- Default til højimpedans (IDLE)
+    U_Pin_1 <= 'Z';
+    U_Pin_2 <= 'Z';
+    U_Pin_3 <= 'Z';
+    MUX_SELECT <= MUX_SELECT_SIGNAL;
+    
+    case MUX_SELECT_SIGNAL is
+        
+        -- I2C (2 pins + 1 fast input): SCL, SDA_TX
+        when "01" =>
+            U_Pin_1 <= I2C_SCL_SIGNAL; -- SCL (Clock/Control)
+            U_Pin_2 <= I2C_SDA_TX;     -- SDA (Data/TX output driver)
+            U_Pin_3 <= 'Z';            -- Ubrugt
+            
+        -- SPI (3 pins + 1 fast input): SCLK, MISO_TX, SS (MOSI er nu fast input)
+        when "10" =>
+            U_Pin_1 <= SPI_SCLK_SIGNAL; -- SCLK
+            U_Pin_2 <= SPI_MISO_TX;     -- MISO (Output fra FPGA)
+            U_Pin_3 <= SPI_SS_SIGNAL;   -- SS (Slave Select)
+            
+        -- UART (1 pin + 1 fast input): TX
+        when "11" =>
+            U_Pin_1 <= UART_TX_SIGNAL;  -- TX (Output)
+            U_Pin_2 <= 'Z';             -- Ubrugt
+            U_Pin_3 <= 'Z';             -- Ubrugt 
+    
+    when others =>
+        -- IDLE_MONITOR state ("00") sikrer alle Universal Pins er i højimpedans
+        U_Pin_1 <= 'Z';
+        U_Pin_2 <= 'Z';
+        U_Pin_3 <= 'Z';
+
+    end case;
+
+end process;
+
+end Behavioral;
