@@ -1,6 +1,6 @@
-----------------------------------------------------------------------------------
--- Module Name: top - Behavioral (Autodetection based on fixed RX pins)
-----------------------------------------------------------------------------------
+
+top.vhd (Autodetection based on fixed RX pins)
+
 
 
 library IEEE;
