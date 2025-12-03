@@ -11,7 +11,6 @@ entity top is
     Port ( 
         -- System kontrol
         clk : in STD_LOGIC; -- 12MHz system clock
-        DEVICE_PRESENT : in STD_LOGIC; -- Frakoblings-detektion pin
         rst : in STD_LOGIC;
         
         -- DEDIKEREDE/FASTE RX LINJER TIL DETEKTION
@@ -109,7 +108,7 @@ END PROCESS;
 -- -----------------------------------------------------------------
 process(clk, rst)
 begin 
-    if (rst = '1') or DEVICE_PRESENT = '1' then -- asynkron reset eller hardware disconnect
+    if (rst = '1') then -- asynkron reset
         state_reg <= IDLE_MONITOR;
     elsif rising_edge(clk) then
         state_reg <= state_next;    
@@ -138,7 +137,7 @@ begin
                 state_next <= IDLE_MONITOR; -- Bliv og monitorer
             end if;
         
-        -- Når vi er aktive, låses protokollen, indtil RESET/DISCONNECT (DEVICE_PRESENT)
+        -- Når vi er aktive, låses protokollen, indtil RESET/DISCONNECT
         when ACTIVE_I2C | ACTIVE_SPI | ACTIVE_UART =>
             state_next <= state_reg;
     
