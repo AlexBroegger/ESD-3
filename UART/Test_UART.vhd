@@ -6,7 +6,5 @@ entity UART is
     port(
         clk :in std_logic
 
-
     );
 end UART;
-
