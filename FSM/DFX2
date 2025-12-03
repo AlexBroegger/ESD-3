@@ -1,3 +1,5 @@
+-- Fil: projFSM.vhd 
+
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
@@ -7,21 +9,23 @@ entity projFSM is
     Port (
         clk      : in  STD_LOGIC;
         reset    : in  STD_LOGIC;
-        
-        -- DEDIKEREDE/FASTE RX LINJER TIL HURTIG DETEKTION
+        -- Ekstern I/O (Systemets U_Pin I/O)
+        u_pin_io : inout STD_LOGIC_VECTOR(7 downto 0);
+        -- Faste static ports for detection udenfor RMs
         I2C_SDA_IN : in STD_LOGIC;
         SPI_MOSI_IN : in STD_LOGIC;
         UART_RX_IN : in STD_LOGIC;
         
-        -- Ekstern I/O (Systemets U_Pin I/O)
-        u_pin_io : inout STD_LOGIC_VECTOR(7 downto 0);
         protocol_active_led : out STD_LOGIC_VECTOR(1 downto 0)
     );
 end projFSM;
 
 architecture Behavioral of projFSM is
 
-    -- 1. KOMPONENTDEKLARATIONER (Uændrede)
+
+    -- 1. KOMPONENTDEKLARATIONER 
+
+    
     component reconfig_interface is
         Port (
             clk         : in    STD_LOGIC;
@@ -46,47 +50,48 @@ architecture Behavioral of projFSM is
     component dpr_controller_wrapper is
         Port (
             clk               : in   STD_LOGIC; 
-            reset             : in   STD_LOGIC;
-            cfg_sel_in        : in   STD_LOGIC_VECTOR(2 downto 0); 
-            cfg_done_out      : out  STD_LOGIC;
-            cfg_error_out     : out  STD_LOGIC;
-            rm_shutdown_ack   : in   STD_LOGIC; 
-            reconfig_i        : in   STD_LOGIC_VECTOR(1 downto 0);
-            reconfig_o        : out  STD_LOGIC_VECTOR(1 downto 0)
+            reset             : in    STD_LOGIC;
+            cfg_sel_in        : in    STD_LOGIC_VECTOR(2 downto 0); 
+            cfg_done_out      : out   STD_LOGIC;
+            cfg_error_out     : out   STD_LOGIC;
+            rm_shutdown_ack   : in    STD_LOGIC; 
+            reconfig_i        : in    STD_LOGIC_VECTOR(1 downto 0);
+            reconfig_o        : out   STD_LOGIC_VECTOR(1 downto 0)
         );
     end component;
+
+
+
 
     -- 2. KONSTANTER OG SIGNALER
 
     -- Til LED test ellers ubrugt
     signal s_protocol_active_led : STD_LOGIC_VECTOR(1 downto 0) := (others => '0');
     
-    -- DFX FSM States
-    type T_FSM_STATE is (
-        S0_MONITOR_IDLE, S1_LOAD_UART, S2_WAIT_LOAD_DONE, 
+    type T_FSM_STATE is (S0_MONITOR_IDLE, S1_LOAD_UART, S2_WAIT_LOAD_DONE, 
         S5_LOAD_SPI, S6_LOAD_I2C, S7_PROTOCOL_FOUND, S8_ERROR
     );
     signal state_reg, state_next : T_FSM_STATE := S0_MONITOR_IDLE;
-    
-    -- Detection Signals (Aktiv high for detekteret aktivitet)
+
+    -- Detection Signals (Aktiv high for detekteret aktivitet) NEW
     signal I2C_ACTIVITY_DETECTED : STD_LOGIC := '0';
     signal SPI_ACTIVITY_DETECTED : STD_LOGIC := '0';
     signal UART_ACTIVITY_DETECTED : STD_LOGIC := '0';
 
-    signal cfg_sel_out            : STD_LOGIC_VECTOR(2 downto 0) := (others => '0');
-    signal cfg_done_in            : STD_LOGIC := '0';
-    signal cfg_error_in           : STD_LOGIC := '0';
-    signal rm_shutdown_ack_in     : STD_LOGIC := '0';
+    signal cfg_sel_out          : STD_LOGIC_VECTOR(2 downto 0) := (others => '0');
+    signal cfg_done_in          : STD_LOGIC := '0';
+    signal cfg_error_in         : STD_LOGIC := '0';
+    signal rm_shutdown_ack_in   : STD_LOGIC := '0';
 
     signal reconfig_interface_i : STD_LOGIC_VECTOR(1 downto 0);
     signal reconfig_interface_o : STD_LOGIC_VECTOR(1 downto 0);
-    signal fsm_rm_trigger       : STD_LOGIC := '0'; -- Bruges ikke længere til test, kan bruges til RM reset/initialisering
+    signal fsm_rm_trigger       : STD_LOGIC := '0';
 
     signal rm_data_in_signal    : STD_LOGIC_VECTOR(7 downto 0);
     signal rm_data_out_signal   : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
     signal rm_oe_signal         : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
 
-    -- Edge Detection Registers
+    -- Edge Detection Registers NEW (antag high to low start)
     signal i2c_sda_prev : STD_LOGIC := '1';
     signal spi_mosi_prev : STD_LOGIC := '1';
     signal uart_rx_prev : STD_LOGIC := '1';
@@ -94,12 +99,12 @@ architecture Behavioral of projFSM is
 
 begin
 
-    -- Standard kommando til RM, evt. start/reset
+    -- Command to RM, evt. start/reset
     reconfig_interface_o <= (others => '0') when fsm_rm_trigger = '0'
-                             else C_START_CMD; 
+                            else C_START_CMD;
 
-
-    -- 3A. KANT-/AKTIVITETSDETEKTION (Løber altid)
+    -- 3A. Edge detection
+    
     PROCESS (clk)
     BEGIN
         IF rising_edge(clk) THEN
@@ -131,34 +136,32 @@ begin
     END PROCESS;
 
 
-    -- 3B. STATE REGISTER
+    -- 3B. STATE MACHINE OG KONTROLLOGIK
+
+
+
     process(clk)
-    begin 
+    begin
         if reset = '1' then
             state_reg <= S0_MONITOR_IDLE;
         elsif rising_edge(clk) then
-            state_reg <= state_next;    
+            state_reg <= state_next;
         end if;
     end process;
 
     
-    -- 3C. NEXT-STATE LOGIC (Hjertet i den hurtige autodetection)
     process(state_reg, I2C_ACTIVITY_DETECTED, SPI_ACTIVITY_DETECTED, UART_ACTIVITY_DETECTED, cfg_done_in, cfg_error_in)
     begin
         state_next <= state_reg;
-        
-        -- Outputs: Sættes til default her og overskrives i state
+       
+        -- Default outputs
         cfg_sel_out    <= (others => '0');
         fsm_rm_trigger <= '0';
-        s_protocol_active_led <= (others => '0');
 
 
         case state_reg is
             
-            when S0_MONITOR_IDLE => 
-                s_protocol_active_led <= "00"; -- Indikerer IDLE
-                
-                -- Hurtig detektion: Hopper direkte til LOAD state
+            when S0_MONITOR_IDLE =>
                 if I2C_ACTIVITY_DETECTED = '1' then
                     state_next <= S6_LOAD_I2C;
                 elsif SPI_ACTIVITY_DETECTED = '1' then
@@ -169,6 +172,7 @@ begin
                     state_next <= S0_MONITOR_IDLE; -- Bliv og monitorer
                 end if;
             
+
             -- Load states: Sætter korrekt config selection og går til ventetilstand
             when S1_LOAD_UART => 
                 cfg_sel_out <= "100"; -- UART config
@@ -185,20 +189,17 @@ begin
 
             when S2_WAIT_LOAD_DONE =>
                 if cfg_done_in = '1' and cfg_error_in = '0' then
-                    -- Succesfuld indlæsning af den identificerede protokol!
                     state_next <= S7_PROTOCOL_FOUND; 
                     fsm_rm_trigger <= '1'; -- Sæt RM til START/RUN
                 elsif cfg_error_in = '1' then
                     state_next <= S8_ERROR;
                 end if;
 
-
             when S7_PROTOCOL_FOUND =>
                 s_protocol_active_led <= "11"; -- Indikerer Protokol Låst/Aktiv
                 fsm_rm_trigger <= '1'; -- Hold RM kørende
                 state_next <= S7_PROTOCOL_FOUND; -- Bliv i denne tilstand indtil reset
-
-
+            
             when S8_ERROR =>
                 state_next <= S8_ERROR;
 
@@ -209,9 +210,10 @@ begin
     end process;
 
 
-    -- 4. INSTANSIERINGER (Uændrede)
 
-    protocol_active_led <= s_protocol_active_led;
+    -- 4. INSTANSIERINGER
+
+    protocol_active_led <= s_protocol_active_led; -- til LED test
 
     -- IP interface
     dpr_bd_wrapper_inst : dpr_controller_wrapper
@@ -226,7 +228,7 @@ begin
         reconfig_o        => open
     );
 
-    -- I/O selektion logik (Denne er i statisk region og fungerer som tri-state MUX)
+    -- I/O selektion logik
     io_mux_inst : io_mux
     Port Map (
         u_pin_io  => u_pin_io,
@@ -235,7 +237,7 @@ begin
         rp_data_i => rm_data_in_signal
     );
 
-    -- Bus Macro Shell (Grænsefladen til den Dynamiske Region)
+    -- RP
     bus_macro_shell_inst : reconfig_interface
     Port Map (
         clk         => clk,
