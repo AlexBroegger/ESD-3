@@ -1,7 +1,5 @@
 
---top.vhd (Autodetection based on fixed RX pins)
-
-
+-- top.vhd (Autodetection based on fixed RX pins)
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
@@ -64,10 +62,10 @@ signal uart_rx_prev : STD_LOGIC := '1';
 
 begin
 
--- -----------------------------------------------------------------
+
 -- KANT-/AKTIVITETSDETEKTION (IDLE_MONITOR State)
 -- Disse processer løber altid, men bruges kun til transition fra IDLE
--- -----------------------------------------------------------------
+
 
 PROCESS (clk)
 BEGIN
@@ -103,9 +101,9 @@ BEGIN
 END PROCESS;
 
 
--- -----------------------------------------------------------------
+
 -- STATE REGISTER
--- -----------------------------------------------------------------
+
 process(clk, rst)
 begin 
     if (rst = '1') then -- asynkron reset
@@ -116,9 +114,9 @@ begin
 end process;
 
 
--- -----------------------------------------------------------------
--- NEXT-STATE LOGIC (Hjertet i autodetection)
--- -----------------------------------------------------------------
+
+-- NEXT-STATE LOGIC 
+
 process(state_reg, I2C_ACTIVITY_DETECTED, SPI_ACTIVITY_DETECTED, UART_ACTIVITY_DETECTED)
 begin
     state_next <= state_reg; -- Default: bliv i nuværende state
@@ -161,7 +159,6 @@ begin
     SPI_SS_SIGNAL <= 'Z';
     UART_TX_SIGNAL <= 'Z';
 
-    MUX_SELECT <= "00"; -- Default til højimpedans for MUX (kan ændres i implementeringen)
     
     case state_reg is
         
@@ -214,8 +211,8 @@ begin
             
         -- UART (1 pin + 1 fast input): TX
         when "11" =>
-            U_Pin_1 <= UART_TX_SIGNAL;  -- TX (Output)
-            U_Pin_2 <= 'Z';             -- Ubrugt
+            U_Pin_1 <= 'Z';             -- Ubrugt
+            U_Pin_2 <= UART_TX_SIGNAL;  -- TX (output fra FPGA)
             U_Pin_3 <= 'Z';             -- Ubrugt 
     
     when others =>
