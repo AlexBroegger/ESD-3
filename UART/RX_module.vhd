@@ -109,7 +109,7 @@ begin
                 bit_count    <= 0; -- Reset
             
             elsif os_tick='1' then
-                -- Standard counter that wraps around
+                -- Standard counter
                 if sample_count = 15 then
                     sample_count <= 0;
                     -- Ingen tick fordi det ikke skal bruges, vi skal bare tælle ticks
