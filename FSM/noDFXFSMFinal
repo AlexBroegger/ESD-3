@@ -35,7 +35,8 @@ architecture Behavioral of top is
             SCLK: in  std_logic;
             MOSI: in  std_logic;
             MISO: out std_logic;
-            CS  : in  std_logic
+            CS  : in  std_logic;
+            mosi_out : out std_logic_vector(7 downto 0)
         );
     end component;
 
@@ -75,6 +76,7 @@ architecture Behavioral of top is
     -- SPI
     signal spi_sclk_int, spi_mosi_int : std_logic := '0';
     signal spi_miso_int, spi_cs_int   : std_logic := 'Z';
+    signal spi_data_out               : std_logic_vector(7 downto 0) := (others => '0');
 
     -- UART
     signal uart_tx_int  : std_logic := 'Z';
@@ -97,12 +99,11 @@ architecture Behavioral of top is
     -- Universal pin drivers
     signal u1_out, u2_out, u3_out : std_logic := 'Z';
     signal u1_oe, u2_oe, u3_oe    : std_logic := '0';
-    signal u1_in, u2_in, u3_in    : std_logic;
 
     -- Debug register
     signal debug_reg : std_logic_vector(7 downto 0) := (others => '0');
 
-    -- ACTIVIY DETECTION
+    -- ACTIVITY DETECTION
     signal I2C_ACTIVITY_DETECTED : STD_LOGIC := '0';
     signal SPI_ACTIVITY_DETECTED : STD_LOGIC := '0';
     signal UART_ACTIVITY_DETECTED : STD_LOGIC := '0';
@@ -111,34 +112,38 @@ architecture Behavioral of top is
     signal spi_cs_prev  : STD_LOGIC := '1';
     signal uart_rx_prev : STD_LOGIC := '1';
 
+    -- Pin readback signals
+    signal u1_pin_in, u2_pin_in, u3_pin_in : std_logic;
+
 begin
 
     spi_cs_int <= SPI_CS_IN;
     uart_rx_int <= UART_RX_IN;
     i2c_ena_int <= I2C_ENA;
 
-    ----------------------------------------------------------------------------
+
+    i2c_sda_int  <= u2_pin_in;    -- SDA line for I2C
+    spi_mosi_int <= u3_pin_in;    -- MOSI line for SPI
+
+
+
     -- Map tri-state drivers to physical pins
-    ----------------------------------------------------------------------------
     U_Pin_1 <= u1_out when u1_oe = '1' else 'Z';
     U_Pin_2 <= u2_out when u2_oe = '1' else 'Z';
     U_Pin_3 <= u3_out when u3_oe = '1' else 'Z';
 
-    -- Always sample inputs
-    u1_in <= U_Pin_1;
-    u2_in <= U_Pin_2;
-    u3_in <= U_Pin_3;
-    
-    
+    -- Always sample physical pins
+    u1_pin_in <= U_Pin_1;
+    u2_pin_in <= U_Pin_2;
+    u3_pin_in <= U_Pin_3;
 
-    ----------------------------------------------------------------------------
-    -- Simple detection logic (no synchronizers)
-    ----------------------------------------------------------------------------
+
+    -- Simple detection logic 
+
 process(clk)
 begin
     if rising_edge(clk) then
 
-        -- Husk tidligere værdier
         spi_cs_prev  <= spi_cs_int;
         uart_rx_prev <= uart_rx_int;
 
@@ -149,7 +154,7 @@ begin
             I2C_ACTIVITY_DETECTED <= '0';
         end if;
 
-        -- SPI detection (falling edge på CS)
+        -- SPI detection (falling edge on CS)
         if spi_cs_int = '0' and spi_cs_prev = '1' then
             SPI_ACTIVITY_DETECTED <= '1';
         else
@@ -166,15 +171,13 @@ begin
     end if;
 end process;
 
---------------------------------------------------------------------------
+
 -- NEXT STATE LOGIC
---------------------------------------------------------------------------
 process(state_reg, I2C_ACTIVITY_DETECTED, SPI_ACTIVITY_DETECTED, UART_ACTIVITY_DETECTED)
 begin
     state_next <= state_reg;
 
     case state_reg is
-        
         when IDLE_MONITOR =>
             if I2C_ACTIVITY_DETECTED = '1' then
                 state_next <= ACTIVE_I2C;
@@ -191,148 +194,106 @@ begin
         when others =>
             state_next <= IDLE_MONITOR;
     end case;
-
 end process;
 
-    ----------------------------------------------------------------------------
-    -- FSM register
-    ----------------------------------------------------------------------------
-    process(clk, rst)
-    begin
-        if rst = '1' then
-            state_reg <= IDLE_MONITOR;
-        elsif rising_edge(clk) then
-            state_reg <= state_next;
-        end if;
-    end process;
-
-    ----------------------------------------------------------------------------
-    -- Output logic for tri-state pins
-    ----------------------------------------------------------------------------
-    process(state_reg)
-    begin
-        -- defaults
-        u1_out <= 'Z'; u1_oe <= '0';
-        u2_out <= 'Z'; u2_oe <= '0';
-        u3_out <= 'Z'; u3_oe <= '0';
-
-        -- internal signals default
-        spi_sclk_int <= u1_in;
-        spi_mosi_int <= u3_in;
-        uart_tx_int  <= 'Z';
-        i2c_scl_int  <= 'Z';
-        i2c_sda_int  <= 'Z';
-        i2c_ena_int  <= '0';
-
-        MUX_SELECT <= "00";
-
-    case state_reg is
-
-        when IDLE_MONITOR =>
-            MUX_SELECT <= "00";
-
-        when ACTIVE_I2C =>
-            MUX_SELECT <= "01";
-
-        when ACTIVE_SPI =>
-            MUX_SELECT <= "10";
-
-        when ACTIVE_UART =>
-            MUX_SELECT <= "11";
-
-        when others =>
-            MUX_SELECT <= "00";
-    end case;
-
-
-    end process;
-
-
-
-process(MUX_SELECT, i2c_scl_int, i2c_sda_int,
-        spi_sclk_int, spi_miso_int, uart_tx_int)
-
+-- FSM register
+process(clk, rst)
 begin
-    -- Universal Pin MUX
-        case MUX_SELECT is
-        
-            -- I2C
-            when "01" =>
-                if i2c_scl_int = '0' then u1_out <= '0'; u1_oe <= '1'; end if;
-                if i2c_sda_int = '0' then u2_out <= '0'; u2_oe <= '1'; end if;
-
-            -- SPI
-            when "10" =>
-                u2_out <= spi_miso_int; u2_oe <= '1';
-
-            -- UART
-            when "11" =>
-                u2_out <= uart_tx_int; u2_oe <= '1';
-
-            when others =>
-                null;
-        end case;
-
+    if rst = '1' then
+        state_reg <= IDLE_MONITOR;
+    elsif rising_edge(clk) then
+        state_reg <= state_next;
+    end if;
 end process;
 
-    ----------------------------------------------------------------------------
-    -- Debug capture
-    ----------------------------------------------------------------------------
-    process(clk, rst)
-    begin
-        if rst = '1' then
-            debug_reg <= (others => '0');
-        elsif rising_edge(clk) then
-            if state_reg = ACTIVE_UART and uart_ready = '1' then
-                debug_reg <= uart_data;
-            elsif state_reg = ACTIVE_SPI then
-                -- you can connect to SPI byte monitor
-                null;
-            elsif state_reg = ACTIVE_I2C and i2c_busy_sig = '0' then
-                debug_reg <= i2c_data_out;
-            end if;
+-- Output Logic
+process(state_reg)
+begin
+    case state_reg is
+        when IDLE_MONITOR => MUX_SELECT <= "00";
+        when ACTIVE_I2C   => MUX_SELECT <= "01";
+        when ACTIVE_SPI   => MUX_SELECT <= "10";
+        when ACTIVE_UART  => MUX_SELECT <= "11";
+        when others       => MUX_SELECT <= "00";
+    end case;
+end process;
+
+
+-- Multiplexing
+process(MUX_SELECT, i2c_scl_int, i2c_sda_int, spi_sclk_int, spi_miso_int, spi_mosi_int, uart_tx_int)
+begin
+    -- Defaults to high-impedance
+    u1_out <= 'Z'; u1_oe <= '0';
+    u2_out <= 'Z'; u2_oe <= '0';
+    u3_out <= 'Z'; u3_oe <= '0';
+
+    case MUX_SELECT is
+        when "01" =>  -- I2C
+            u1_out <= i2c_scl_int; u1_oe <= '1';
+        when "10" =>  -- SPI
+            u1_out <= spi_sclk_int; u1_oe <= '1';
+            u2_out <= spi_miso_int; u2_oe <= '1';
+        when "11" =>  -- UART
+            u2_out <= uart_tx_int; u2_oe <= '1';
+        when others =>
+            null; -- already Z
+    end case;
+end process;
+
+-- Debug capture
+process(clk, rst)
+begin
+    if rst = '1' then
+        debug_reg <= (others => '0');
+    elsif rising_edge(clk) then
+        if state_reg = ACTIVE_UART and uart_ready = '1' then
+            debug_reg <= uart_data;
+        elsif state_reg = ACTIVE_SPI then
+            debug_reg <= spi_data_out;
+        elsif state_reg = ACTIVE_I2C and i2c_busy_sig = '0' then
+            debug_reg <= i2c_data_out;
         end if;
-    end process;
+    end if;
+end process;
 
-    DEBUG_OUT <= debug_reg;
+DEBUG_OUT <= debug_reg;
 
-    ----------------------------------------------------------------------------
-    -- Protocol instances
-    ----------------------------------------------------------------------------
-    SPI_slave_inst : SPI_slave
-        Port Map (
-            SCLK => spi_sclk_int,
-            MOSI => spi_mosi_int,
-            MISO => spi_miso_int,
-            CS   => spi_cs_int
-        );
+-- Protocol instances
+SPI_slave_inst : SPI_slave
+    Port Map (
+        SCLK => spi_sclk_int,
+        MOSI => spi_mosi_int,
+        MISO => spi_miso_int,
+        CS   => spi_cs_int,
+        mosi_out => spi_data_out
+    );
 
-    UART_inst : RX
-        port map(
-            clk => clk,
-            reset => rst,
-            rx_line => uart_rx_int,
-            rx_data => uart_data,
-            rx_ready => uart_ready,
-            parity_enable => '0',
-            parity_m => '0',
-            parity_valid => open
-        );
+UART_inst : RX
+    port map(
+        clk => clk,
+        reset => rst,
+        rx_line => uart_rx_int,
+        rx_data => uart_data,
+        rx_ready => uart_ready,
+        parity_enable => '0',
+        parity_m => '0',
+        parity_valid => open
+    );
 
-    I2C_master_inst : I2C_Master
-        Port Map(
-            clk => clk,
-            reset => rst,
-            ena => i2c_ena_int,
-            rw  => i2c_rw,
-            s_addr => i2c_addr,
-            write_in => i2c_data_in,
-            new_input => i2c_new_input,
-            read_out => i2c_data_out,
-            busy => i2c_busy_sig,
-            ack_error => i2c_ack_err_sig,
-            sda => i2c_sda_int,
-            scl => i2c_scl_int
-        );
+I2C_master_inst : I2C_Master
+    Port Map(
+        clk       => clk,
+        reset     => rst,
+        ena       => i2c_ena_int,
+        rw        => i2c_rw,
+        s_addr    => i2c_addr,
+        write_in  => i2c_data_in,
+        new_input => i2c_new_input,
+        read_out  => i2c_data_out,
+        busy      => i2c_busy_sig,
+        ack_error => i2c_ack_err_sig,
+        sda       => i2c_sda_int,
+        scl       => i2c_scl_int
+    );
 
 end Behavioral;
