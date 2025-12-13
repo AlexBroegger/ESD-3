@@ -21,7 +21,14 @@ entity top is
         U_Pin_3 : inout STD_LOGIC;  -- MOSI
 
         -- Debug output
-        DEBUG_OUT : out STD_LOGIC_VECTOR(7 downto 0)
+        DEBUG_OUT : out STD_LOGIC_VECTOR(7 downto 0);
+        
+        -- TEST
+        test_port : out STD_LOGIC;
+       
+       -- ERROR
+        protocol_error : out STD_LOGIC
+        
     );
 end top;
 
@@ -36,7 +43,9 @@ architecture Behavioral of top is
             MOSI: in  std_logic;
             MISO: out std_logic;
             CS  : in  std_logic;
-            mosi_out : out std_logic_vector(7 downto 0)
+            mosi_out : out std_logic_vector(7 downto 0);
+            byte_ready_port : out std_logic;
+            clk             : in std_logic
         );
     end component;
 
@@ -49,7 +58,8 @@ architecture Behavioral of top is
             rx_ready     : out std_logic;
             parity_enable: in  std_logic;
             parity_m     : in  std_logic;
-            parity_valid : out std_logic
+            parity_valid : out std_logic;
+            rx_test      : out std_logic
         );
     end component;
 
@@ -77,6 +87,7 @@ architecture Behavioral of top is
     signal spi_sclk_int, spi_mosi_int : std_logic := '0';
     signal spi_miso_int, spi_cs_int   : std_logic := 'Z';
     signal spi_data_out               : std_logic_vector(7 downto 0) := (others => '0');
+    signal spi_ready                  : std_logic := '0';
 
     -- UART
     signal uart_tx_int  : std_logic := 'Z';
@@ -114,6 +125,27 @@ architecture Behavioral of top is
 
     -- Pin readback signals
     signal u1_pin_in, u2_pin_in, u3_pin_in : std_logic;
+    
+
+    -- Error checking
+    signal error_uart, error_spi, error_i2c : std_logic := '0';
+    signal uart_error_latched, spi_error_latched, i2c_error_latched : std_logic := '0';
+    signal protocol_error_signal : std_logic := '0';
+    
+    -- TEST
+    signal led_test : std_logic;
+    signal rx_sync_0 : std_logic := '1';
+    signal rx_sync_1 : std_logic := '1';
+    
+    signal cs_sync_0 : std_logic := '1';
+    signal cs_sync_1 : std_logic := '1';
+
+    signal ena_sync_0 : std_logic := '1';
+    signal ena_sync_1 : std_logic := '1';
+
+    signal test_sig   : std_logic := '0';
+    signal u1_prev    : std_logic;
+    signal u3_prev    : std_logic;
 
 begin
 
@@ -121,9 +153,13 @@ begin
     uart_rx_int <= UART_RX_IN;
     i2c_ena_int <= I2C_ENA;
 
+    -- Always Read Ports
+    i2c_scl_int  <= u1_pin_in;    -- SCL line for I2C (bidirectional)
+    spi_sclk_int <= u1_pin_in;    -- SPI SCLK (input)
+    i2c_sda_int  <= u2_pin_in;    -- SDA line for I2C (bidirectional)
+    spi_mosi_int <= u3_pin_in;    -- SPI MOSI (input)
 
-    i2c_sda_int  <= u2_pin_in;    -- SDA line for I2C
-    spi_mosi_int <= u3_pin_in;    -- MOSI line for SPI
+
 
 
 
@@ -136,6 +172,7 @@ begin
     u1_pin_in <= U_Pin_1;
     u2_pin_in <= U_Pin_2;
     u3_pin_in <= U_Pin_3;
+    
 
 
     -- Simple detection logic 
@@ -143,33 +180,41 @@ begin
 process(clk)
 begin
     if rising_edge(clk) then
-
-        spi_cs_prev  <= spi_cs_int;
-        uart_rx_prev <= uart_rx_int;
-
-        -- I2C detection via fast ENA pin
-        if I2C_ENA = '1' then
-            I2C_ACTIVITY_DETECTED <= '1';
-        else
-            I2C_ACTIVITY_DETECTED <= '0';
-        end if;
-
-        -- SPI detection (falling edge on CS)
-        if spi_cs_int = '0' and spi_cs_prev = '1' then
-            SPI_ACTIVITY_DETECTED <= '1';
-        else
-            SPI_ACTIVITY_DETECTED <= '0';
-        end if;
-
-        -- UART startbit detection
-        if uart_rx_int = '0' and uart_rx_prev = '1' then
+    
+        rx_sync_0 <= UART_RX_IN;
+        rx_sync_1 <= rx_sync_0;
+    
+        cs_sync_0 <= SPI_CS_IN;
+        cs_sync_1 <= cs_sync_0;
+               
+       
+        uart_rx_prev <= rx_sync_1;
+        spi_cs_prev <= cs_sync_1;        
+        
+        
+        if rx_sync_1 = '0' and uart_rx_prev = '1' then
             UART_ACTIVITY_DETECTED <= '1';
         else
             UART_ACTIVITY_DETECTED <= '0';
         end if;
 
-    end if;
+    
+        if cs_sync_1 = '0' and spi_cs_prev = '1' then
+            SPI_ACTIVITY_DETECTED <= '1';
+        else
+            SPI_ACTIVITY_DETECTED <= '0';
+        end if;
+
+    
+        if I2C_ENA = '1' then
+            I2C_ACTIVITY_DETECTED <= '1';
+        else
+            I2C_ACTIVITY_DETECTED <= '0';
+        end if;
+    end if;   
+ 
 end process;
+
 
 
 -- NEXT STATE LOGIC
@@ -179,11 +224,11 @@ begin
 
     case state_reg is
         when IDLE_MONITOR =>
-            if I2C_ACTIVITY_DETECTED = '1' then
+            if I2C_ACTIVITY_DETECTED = '1' and SPI_ACTIVITY_DETECTED = '0' and UART_ACTIVITY_DETECTED = '0' then
                 state_next <= ACTIVE_I2C;
-            elsif SPI_ACTIVITY_DETECTED = '1' then
+            elsif SPI_ACTIVITY_DETECTED = '1' and I2C_ACTIVITY_DETECTED = '0' and UART_ACTIVITY_DETECTED = '0' then
                 state_next <= ACTIVE_SPI;
-            elsif UART_ACTIVITY_DETECTED = '1' then
+            elsif UART_ACTIVITY_DETECTED = '1' and SPI_ACTIVITY_DETECTED = '0' and I2C_ACTIVITY_DETECTED = '0' then
                 state_next <= ACTIVE_UART;
             end if;
 
@@ -230,8 +275,8 @@ begin
     case MUX_SELECT is
         when "01" =>  -- I2C
             u1_out <= i2c_scl_int; u1_oe <= '1';
+            u2_out <= i2c_sda_int; u2_oe <= '1';
         when "10" =>  -- SPI
-            u1_out <= spi_sclk_int; u1_oe <= '1';
             u2_out <= spi_miso_int; u2_oe <= '1';
         when "11" =>  -- UART
             u2_out <= uart_tx_int; u2_oe <= '1';
@@ -239,6 +284,81 @@ begin
             null; -- already Z
     end case;
 end process;
+
+    ----------------------------------------------------------------------------
+    -- Pin-Level Error Detection
+    ----------------------------------------------------------------------------
+    process(clk)
+    begin
+    if rising_edge(clk) then
+    u1_prev <= u1_pin_in;
+    u3_prev <= u3_pin_in;
+    end if;
+    end process;
+    
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            uart_error_latched <= '0';
+            spi_error_latched  <= '0';
+            i2c_error_latched  <= '0';
+            protocol_error_signal     <= '0';
+        elsif rising_edge(clk) then
+
+            -- Reset per-cycle flags
+            error_uart <= '0';
+            error_spi  <= '0';
+
+            case state_reg is
+                when ACTIVE_UART =>
+                    if SPI_CS_IN = '0' then
+                        error_uart <= '1';
+                    end if;
+
+                    if I2C_ENA = '1' then
+                        error_uart <= '1';
+                    end if;
+
+                    if u1_pin_in /= u1_prev then
+                        error_uart <= '1';
+                    end if;
+
+                    if u3_pin_in /= u3_prev then
+                        error_uart <= '1';
+                    end if;
+
+                when ACTIVE_SPI =>
+                    if (I2C_ENA = '1') or (UART_RX_IN= '0') then
+                        error_spi <= '1';
+                    end if;
+
+                when ACTIVE_I2C =>
+                    if i2c_ack_err_sig = '1' then
+                        i2c_error_latched <= i2c_ack_err_sig;
+                    end if;
+                    if (SPI_CS_IN = '0') or (UART_RX_IN = '0') then
+                        error_spi <= '1';
+                    end if;
+
+                when others =>
+                    null;
+            end case;
+
+            -- Latch UART and SPI errors
+            if error_uart = '1' then
+                uart_error_latched <= '1';
+            end if;
+
+            if error_spi = '1' then
+                spi_error_latched <= '1';
+            end if;
+
+            -- Combine errors
+            protocol_error_signal <= uart_error_latched or spi_error_latched or i2c_error_latched;
+        end if;
+    end process;
+
+protocol_error <= protocol_error_signal;
 
 -- Debug capture
 process(clk, rst)
@@ -258,6 +378,12 @@ end process;
 
 DEBUG_OUT <= debug_reg;
 
+-- TEST
+-- test_port <= uart_rx_int; -- virker
+test_port <= test_sig;
+-- test_port <= uart_data(0);   
+
+
 -- Protocol instances
 SPI_slave_inst : SPI_slave
     Port Map (
@@ -265,7 +391,9 @@ SPI_slave_inst : SPI_slave
         MOSI => spi_mosi_int,
         MISO => spi_miso_int,
         CS   => spi_cs_int,
-        mosi_out => spi_data_out
+        mosi_out => spi_data_out,
+        byte_ready_port => spi_ready,
+        clk             => clk
     );
 
 UART_inst : RX
@@ -277,7 +405,8 @@ UART_inst : RX
         rx_ready => uart_ready,
         parity_enable => '0',
         parity_m => '0',
-        parity_valid => open
+        parity_valid => open,
+        rx_test => test_sig
     );
 
 I2C_master_inst : I2C_Master
