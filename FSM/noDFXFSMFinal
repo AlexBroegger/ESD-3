@@ -368,7 +368,7 @@ begin
     elsif rising_edge(clk) then
         if state_reg = ACTIVE_UART and uart_ready = '1' then
             debug_reg <= uart_data;
-        elsif state_reg = ACTIVE_SPI then
+        elsif state_reg = ACTIVE_SPI and spi_ready = '1' then
             debug_reg <= spi_data_out;
         elsif state_reg = ACTIVE_I2C and i2c_busy_sig = '0' then
             debug_reg <= i2c_data_out;
