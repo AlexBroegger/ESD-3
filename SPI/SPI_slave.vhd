@@ -58,30 +58,35 @@ begin
     process(SCLK, CS)
     begin
            
-         if CS = '1' then     
-        -- If CS line is high then no communication is happening
-        -- If CS goes high then communication must sieze
+if CS = '1' then     
+  -- If CS line is high then no communication is happening
+  -- If CS goes high then communication must sieze
+  bit_count       <= 0;
+  byte_ready_sclk <= '0';
+
+
+elsif CS = '0' then
+    if rising_edge(SCLK) then
+      test_data <= MOSI;
+      -- Sample MOSI and insert into shift register
+      MOSI_shift_reg <= MOSI_shift_reg(6 downto 0) & MOSI;    
+      --data_ff_2 <= MOSI;
+      --data_ff <= data_ff_2;
+
+    -- When a byte is ready, flag as ready
+        if bit_count = 7 then
+            -- Copy out the completed byte
+            SPI_byte_ready  <= MOSI_shift_reg(7 downto 0);
+            -- Pulse the flag
+            byte_ready_sclk <= '1';
             bit_count       <= 0;
+    
+        else 
             byte_ready_sclk <= '0';
-
-
-        elsif rising_edge(SCLK) then
-            -- Sample MOSI and insert into shift register
-            MOSI_shift_reg <= MOSI_shift_reg(7 downto 0) & MOSI;
-            
-            -- When a byte is ready, flag as ready
-            if bit_count = 7 then
-                -- Copy out the completed byte
-                SPI_byte_ready  <= MOSI_shift_reg(7 downto 0) & MOSI;
-                -- Pulse the flag
-                byte_ready_sclk <= '1';
-                bit_count       <= 0;
-        
-            else 
-                byte_ready_sclk <= '0';
-                bit_count       <= bit_count + 1; 
-            end if;
+            bit_count       <= bit_count + 1; 
         end if;
+    end if;
+end if;
 
      
 
