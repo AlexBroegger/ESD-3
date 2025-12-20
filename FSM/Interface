@@ -41,7 +41,7 @@ architecture Structural of FINAL_SYSTEM_TOP is
     signal pc_rx_ready        : std_logic;
     
     signal pc_tx_data         : std_logic_vector(7 downto 0);
-    signal pc_tx_start        : std_logic;
+    signal tx_data_valid      : std_logic;
 
 begin
 
@@ -82,7 +82,7 @@ begin
         RX_VALID      => pc_rx_ready,
         DEBUG_DATA_IN => internal_debug_reg,
         tx_data       => pc_tx_data,
-        tx_data_valid => pc_tx_start
+        tx_data_valid => tx_data_valid
     );
 
     -- 4. PC OUTPUT (Sender data tilbage til PC)
@@ -90,7 +90,7 @@ begin
     port map (
         clk            => CLK,
         reset          => RESET,
-        data_available => pc_tx_start,
+        data_available => tx_data_valid,
         tx_data        => pc_tx_data,
         tx_line        => USB_TX_LINE,
         tx_busy        => open
