@@ -1,0 +1,99 @@
+-- NOTES:
+        -- NY PORT i PARSEREN: Tager data fra DEBUG_OUT og smider det ind i tx_byte_i når en read command er sendt
+        -- DEBUG_DATA_IN : in  std_logic_vector(7 downto 0);
+        -- forbundet internal_debug_reg som er forbundet DEBUG_out
+
+        
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+
+entity FINAL_SYSTEM_TOP is
+    Port (
+        CLK        : in  STD_LOGIC; -- 12 MHz
+        RESET      : in  STD_LOGIC;
+        
+        -- DEDICATED PC INTERFACE (USB Port)
+        USB_RX_LINE : in  STD_LOGIC; -- Forbundet J17 af USB
+        USB_TX_LINE : out STD_LOGIC; -- Forbundet J18 af USB
+
+        -- UNIVERSAL PINS (Sensor Side)
+        U_Pin_1    : inout STD_LOGIC;
+        U_Pin_2    : inout STD_LOGIC;
+        U_Pin_3    : inout STD_LOGIC;
+        
+        -- CONSTANT DETECTION INPUTS
+        I2C_ENA    : in  STD_LOGIC;
+        SPI_CS_IN  : in  STD_LOGIC;
+        UART_RX_IN : in  STD_LOGIC;
+        
+        -- andre ting
+        MUX_SELECT_OUT : buffer STD_LOGIC_VECTOR(1 downto 0);
+        PROTO_ERR      : out STD_LOGIC
+    );
+end FINAL_SYSTEM_TOP;
+
+architecture Structural of FINAL_SYSTEM_TOP is
+
+    -- MODUL INTERFACE SIGNALER
+    signal internal_debug_reg : std_logic_vector(7 downto 0);
+    signal pc_rx_data         : std_logic_vector(7 downto 0);
+    signal pc_rx_ready        : std_logic;
+    
+    signal pc_tx_data         : std_logic_vector(7 downto 0);
+    signal pc_tx_start        : std_logic;
+
+begin
+
+    -- 1. DETECTION LOGIC
+    DETECTION_BLOCK : entity work.top
+    port map (
+        clk        => CLK,
+        rst        => RESET,
+        I2C_ENA    => I2C_ENA,
+        SPI_CS_IN  => SPI_CS_IN,
+        UART_RX_IN => UART_RX_IN,
+        MUX_SELECT => MUX_SELECT_OUT,
+        U_Pin_1    => U_Pin_1,
+        U_Pin_2    => U_Pin_2,
+        U_Pin_3    => U_Pin_3,
+        DEBUG_OUT  => internal_debug_reg, -- FÆRDIG BYTE GÅR TIL PARSEREN ->>>
+        protocol_error => PROTO_ERR
+    );
+
+    -- 2. PC INPUT (Til modtagelse af kommandoer)
+    PC_UART_RX : entity work.RX
+    port map (
+        clk           => CLK,
+        reset         => RESET,
+        rx_line       => USB_RX_LINE,
+        rx_data       => pc_rx_data,
+        rx_ready      => pc_rx_ready,
+        parity_enable => '0',
+        parity_m      => '0'
+    );
+
+    -- 3. PARSER
+    PARSER_INST : entity work.UART_parser
+    port map (
+        CLK           => CLK,
+        RESET         => RESET,
+        DATA_IN       => pc_rx_data,
+        RX_VALID      => pc_rx_ready,
+        DEBUG_DATA_IN => internal_debug_reg,
+        tx_data       => pc_tx_data,
+        tx_data_valid => pc_tx_start
+    );
+
+    -- 4. PC OUTPUT (Sender data tilbage til PC)
+    PC_UART_TX : entity work.TX
+    port map (
+        clk            => CLK,
+        reset          => RESET,
+        data_available => pc_tx_start,
+        tx_data        => pc_tx_data,
+        tx_line        => USB_TX_LINE,
+        tx_busy        => open
+    );
+
+end Structural;
