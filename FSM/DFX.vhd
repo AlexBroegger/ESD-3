@@ -11,12 +11,6 @@ entity projFSM is
         reset    : in  STD_LOGIC;
         -- Ekstern I/O (Systemets U_Pin I/O)
         u_pin_io : inout STD_LOGIC_VECTOR(7 downto 0);
-        -- Faste static ports for detection udenfor RMs
-        I2C_SDA_IN : in STD_LOGIC;
-        SPI_MOSI_IN : in STD_LOGIC;
-        UART_RX_IN : in STD_LOGIC;
-        
-        protocol_active_led : out STD_LOGIC_VECTOR(1 downto 0)
     );
 end projFSM;
 
@@ -65,18 +59,12 @@ architecture Behavioral of projFSM is
 
     -- 2. KONSTANTER OG SIGNALER
 
-    -- Til LED test ellers ubrugt
-    signal s_protocol_active_led : STD_LOGIC_VECTOR(1 downto 0) := (others => '0');
     
-    type T_FSM_STATE is (S0_MONITOR_IDLE, S1_LOAD_UART, S2_WAIT_LOAD_DONE, 
-        S5_LOAD_SPI, S6_LOAD_I2C, S7_PROTOCOL_FOUND, S8_ERROR
+    type T_FSM_STATE is (
+        S0_INIT, S1_LOAD_UART, S2_WAIT_LOAD_DONE, S3_TEST_PROTOCOL,
+        S4_CHECK_RESULT, S5_LOAD_SPI, S6_LOAD_I2C, S7_PROTOCOL_FOUND, S8_ERROR
     );
-    signal state_reg, state_next : T_FSM_STATE := S0_MONITOR_IDLE;
-
-    -- Detection Signals (Aktiv high for detekteret aktivitet) NEW
-    signal I2C_ACTIVITY_DETECTED : STD_LOGIC := '0';
-    signal SPI_ACTIVITY_DETECTED : STD_LOGIC := '0';
-    signal UART_ACTIVITY_DETECTED : STD_LOGIC := '0';
+    signal state_reg, state_next : T_FSM_STATE := S0_INIT;
 
     signal cfg_sel_out          : STD_LOGIC_VECTOR(2 downto 0) := (others => '0');
     signal cfg_done_in          : STD_LOGIC := '0';
@@ -91,120 +79,96 @@ architecture Behavioral of projFSM is
     signal rm_data_out_signal   : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
     signal rm_oe_signal         : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
 
-    -- Edge Detection Registers NEW (antag high to low start)
-    signal i2c_sda_prev : STD_LOGIC := '1';
-    signal spi_mosi_prev : STD_LOGIC := '1';
-    signal uart_rx_prev : STD_LOGIC := '1';
-
 
 begin
 
-    -- Command to RM, evt. start/reset
+
     reconfig_interface_o <= (others => '0') when fsm_rm_trigger = '0'
                             else C_START_CMD;
 
-    -- 3A. Edge detection
-    
-    PROCESS (clk)
-    BEGIN
-        IF rising_edge(clk) THEN
-            i2c_sda_prev <= I2C_SDA_IN;
-            spi_mosi_prev <= SPI_MOSI_IN;
-            uart_rx_prev <= UART_RX_IN;
 
-            -- I2C Detection: START condition (Faldende kant på SDA_IN)
-            IF I2C_SDA_IN = '0' AND i2c_sda_prev = '1' THEN
-                I2C_ACTIVITY_DETECTED <= '1';
-            ELSE
-                I2C_ACTIVITY_DETECTED <= '0';
-            END IF;
-
-            -- SPI Detection: Ændring på MOSI
-            IF SPI_MOSI_IN /= spi_mosi_prev THEN
-                SPI_ACTIVITY_DETECTED <= '1';
-            ELSE
-                SPI_ACTIVITY_DETECTED <= '0';
-            END IF;
-            
-            -- UART Detection: Start Bit (Faldende kant på RX-linjen)
-            IF UART_RX_IN = '0' AND uart_rx_prev = '1' THEN
-                UART_ACTIVITY_DETECTED <= '1';
-            ELSE
-                UART_ACTIVITY_DETECTED <= '0';
-            END IF;
-        END IF;
-    END PROCESS;
-
-
-    -- 3B. STATE MACHINE OG KONTROLLOGIK
+    -- 3. STATE MACHINE OG KONTROLLOGIK
 
 
 
-    process(clk)
+    process(clk, reset)
     begin
+    
+    
         if reset = '1' then
-            state_reg <= S0_MONITOR_IDLE;
+            state_reg <= S0_INIT;
         elsif rising_edge(clk) then
             state_reg <= state_next;
         end if;
     end process;
 
     
-    process(state_reg, I2C_ACTIVITY_DETECTED, SPI_ACTIVITY_DETECTED, UART_ACTIVITY_DETECTED, cfg_done_in, cfg_error_in)
+    process(state_reg, reconfig_interface_i, cfg_done_in, cfg_error_in, rm_shutdown_ack_in, cfg_sel_out, fsm_rm_trigger)
     begin
         state_next <= state_reg;
-       
-        -- Default outputs
+        
+
+        
         cfg_sel_out    <= (others => '0');
         fsm_rm_trigger <= '0';
 
 
         case state_reg is
             
-            when S0_MONITOR_IDLE =>
-                if I2C_ACTIVITY_DETECTED = '1' then
-                    state_next <= S6_LOAD_I2C;
-                elsif SPI_ACTIVITY_DETECTED = '1' then
-                    state_next <= S5_LOAD_SPI;
-                elsif UART_ACTIVITY_DETECTED = '1' then
-                    state_next <= S1_LOAD_UART;
-                else
-                    state_next <= S0_MONITOR_IDLE; -- Bliv og monitorer
+            when S0_INIT =>
+                state_next <= S1_LOAD_UART;
+                
+                
+            when S1_LOAD_UART | S5_LOAD_SPI | S6_LOAD_I2C =>
+                if state_reg = S1_LOAD_UART then 
+                    cfg_sel_out <= "100";
+                elsif state_reg = S5_LOAD_SPI then 
+                    cfg_sel_out <= "010";
+                elsif state_reg = S6_LOAD_I2C then 
+                    cfg_sel_out <= "001";
                 end if;
-            
-
-            -- Load states: Sætter korrekt config selection og går til ventetilstand
-            when S1_LOAD_UART => 
-                cfg_sel_out <= "100"; -- UART config
-                state_next <= S2_WAIT_LOAD_DONE;
-            
-            when S5_LOAD_SPI => 
-                cfg_sel_out <= "010"; -- SPI config
-                state_next <= S2_WAIT_LOAD_DONE;
-
-            when S6_LOAD_I2C => 
-                cfg_sel_out <= "001"; -- I2C config
-                state_next <= S2_WAIT_LOAD_DONE;
+               
+                state_next <= S2_WAIT_LOAD_DONE; 
 
 
             when S2_WAIT_LOAD_DONE =>
                 if cfg_done_in = '1' and cfg_error_in = '0' then
-                    state_next <= S7_PROTOCOL_FOUND; 
-                    fsm_rm_trigger <= '1'; -- Sæt RM til START/RUN
+                    state_next <= S3_TEST_PROTOCOL;
                 elsif cfg_error_in = '1' then
                     state_next <= S8_ERROR;
                 end if;
 
-            when S7_PROTOCOL_FOUND =>
-                s_protocol_active_led <= "11"; -- Indikerer Protokol Låst/Aktiv
-                fsm_rm_trigger <= '1'; -- Hold RM kørende
-                state_next <= S7_PROTOCOL_FOUND; -- Bliv i denne tilstand indtil reset
+
+            when S3_TEST_PROTOCOL =>
+                fsm_rm_trigger <= '1'; 
+                state_next <= S4_CHECK_RESULT;
+
+            when S4_CHECK_RESULT =>
+            fsm_rm_trigger <= '0';
             
+                if reconfig_interface_i = C_TEST_SUCCESS then
+                    state_next <= S7_PROTOCOL_FOUND;
+
+                elsif reconfig_interface_i = C_TEST_FAILURE then
+                    if cfg_sel_out = "100" then 
+                        state_next <= S5_LOAD_SPI; 
+                    elsif cfg_sel_out = "010" then 
+                        state_next <= S6_LOAD_I2C;
+                    elsif cfg_sel_out = "001" then 
+                        state_next <= S8_ERROR;
+                    else
+                        state_next <= S8_ERROR;
+                    end if;
+                end if;
+
+            when S7_PROTOCOL_FOUND =>
+                state_next <= S7_PROTOCOL_FOUND;
+
             when S8_ERROR =>
                 state_next <= S8_ERROR;
 
             when others =>
-                state_next <= S0_MONITOR_IDLE;
+                state_next <= S0_INIT;
 
         end case;
     end process;
@@ -213,7 +177,7 @@ begin
 
     -- 4. INSTANSIERINGER
 
-    protocol_active_led <= s_protocol_active_led; -- til LED test
+
 
     -- IP interface
     dpr_bd_wrapper_inst : dpr_controller_wrapper
