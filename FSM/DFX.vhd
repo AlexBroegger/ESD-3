@@ -180,20 +180,19 @@ begin
     end process;
 
 -- Debug capture
-process(clk, rst)
+process(clk, reset) 
 begin
-    if rst = '1' then
+    if reset = '1' then
         debug_reg <= (others => '0');
     elsif rising_edge(clk) then
-        if state_reg = ACTIVE_UART and uart_ready = '1' then
-            debug_reg <= rm_data_out_signal;
-        elsif state_reg = ACTIVE_SPI and spi_ready = '1' then
-            debug_reg <= rm_data_out_signal;
-        elsif state_reg = ACTIVE_I2C and i2c_busy_sig = '0' then
+        if state_reg = S7_PROTOCOL_FOUND then
             debug_reg <= rm_data_out_signal;
         end if;
     end if;
 end process;
+
+
+DEBUG_OUT <= debug_reg;
 
     -- 4. INSTANSIERINGER
 
