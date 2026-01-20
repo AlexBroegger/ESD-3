@@ -79,6 +79,8 @@ architecture Behavioral of projFSM is
     signal rm_data_out_signal   : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
     signal rm_oe_signal         : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
 
+    signal debug_reg            : STD_LOGIC_VECTOR(7 downto 0) := (others => '0');
+
 
 begin
 
@@ -173,7 +175,21 @@ begin
         end case;
     end process;
 
-
+-- Debug capture
+process(clk, rst)
+begin
+    if rst = '1' then
+        debug_reg <= (others => '0');
+    elsif rising_edge(clk) then
+        if state_reg = ACTIVE_UART and uart_ready = '1' then
+            debug_reg <= rm_data_out_signal;
+        elsif state_reg = ACTIVE_SPI and spi_ready = '1' then
+            debug_reg <= rm_data_out_signal;
+        elsif state_reg = ACTIVE_I2C and i2c_busy_sig = '0' then
+            debug_reg <= rm_data_out_signal;
+        end if;
+    end if;
+end process;
 
     -- 4. INSTANSIERINGER
 
