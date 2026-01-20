@@ -11,6 +11,10 @@ entity projFSM is
         reset    : in  STD_LOGIC;
         -- Ekstern I/O (Systemets U_Pin I/O)
         u_pin_io : inout STD_LOGIC_VECTOR(7 downto 0);
+
+         -- Debug output
+        DEBUG_OUT : out STD_LOGIC_VECTOR(7 downto 0)
+        
     );
 end projFSM;
 
