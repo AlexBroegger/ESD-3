@@ -91,6 +91,8 @@ architecture Behavioral of top is
 
     -- UART
     signal uart_tx_int  : std_logic := 'Z';
+    signal tx_data      : std_logic_vector(7 downto 0) := (others => '0');
+    signal tx_data_valid : std_logic := 0;
     signal uart_data    : std_logic_vector(7 downto 0) := (others => '0');
     signal uart_ready   : std_logic := '0';
     signal uart_rx_int  : std_logic := '1';
@@ -424,5 +426,16 @@ I2C_master_inst : I2C_Master
         sda       => i2c_sda_int,
         scl       => i2c_scl_int
     );
+
+TX_inst : TX
+    port map(
+        clk            => clk,
+        reset          => rst,
+        data_available => tx_data_valid,
+        tx_line        => uart_tx_int,
+        tx_data        => tx_data,
+        tx_busy        => open
+    );
+
 
 end Behavioral;
